@@ -1,22 +1,32 @@
-// 접속 코드로 설정(키·토큰)을 암호화해 공개 저장소에 두고, 다른 기기에서는 코드만 입력해 불러온다.
-// 암호문이 공개되므로 코드가 짧으면 오프라인 대입 공격에 뚫린다 → 강한 코드 강제 + 느린 키 유도(PBKDF2 60만 회).
+// 아이디/비밀번호 로그인 (서버 없음)
+//
+// 사용자마다 "그 사람이 쓸 설정(토큰·키·권한)"을 그 사람 비밀번호로 암호화해 공개 앱 저장소
+// public/users/<아이디 해시>.json 에 둔다. 로그인 = 파일을 받아 비밀번호로 복호화.
+// - 관리자: 쓰기 토큰 + Claude 키
+// - 보기 전용: 데이터 저장소 "읽기 전용" 토큰만 → GitHub이 쓰기를 거부하므로 권한이 실제로 강제된다.
+// 암호문이 공개되므로 느린 키 유도(PBKDF2 60만 회)를 쓰고, 비밀번호는 강하게 요구한다.
 
 const ITER = 600000;
-const VAULT_PATH = 'public/vault.json';
 const enc = new TextEncoder();
 const dec = new TextDecoder();
 const b64 = (buf) => btoa(String.fromCharCode(...new Uint8Array(buf)));
 const unb64 = (s) => Uint8Array.from(atob(s), (c) => c.charCodeAt(0));
 
-export function codeProblem(code) {
-  if (code.length < 8) return '8자 이상이어야 해요.';
-  if (!/[A-Za-z]/.test(code) || !/\d/.test(code)) return '영문과 숫자를 섞어 주세요.';
-  if (/^(.)\1+$/.test(code) || /^(?:0123|1234|abcd|qwer|pass)/i.test(code)) return '너무 쉬운 코드예요.';
+export const normId = (id) => String(id || '').trim().toLowerCase();
+
+export function passwordProblem(pw) {
+  if (pw.length < 8) return '비밀번호는 8자 이상이어야 해요.';
+  if (!/[A-Za-z]/.test(pw) || !/\d/.test(pw)) return '비밀번호에 영문과 숫자를 섞어 주세요.';
   return '';
 }
 
-async function deriveKey(code, salt, iter) {
-  const base = await crypto.subtle.importKey('raw', enc.encode(code), 'PBKDF2', false, ['deriveKey']);
+async function userFile(id) {
+  const hash = await crypto.subtle.digest('SHA-256', enc.encode('shoot-briefing:' + normId(id)));
+  return `public/users/${[...new Uint8Array(hash)].slice(0, 12).map((b) => b.toString(16).padStart(2, '0')).join('')}.json`;
+}
+
+async function deriveKey(id, pw, salt, iter) {
+  const base = await crypto.subtle.importKey('raw', enc.encode(normId(id) + '\n' + pw), 'PBKDF2', false, ['deriveKey']);
   return crypto.subtle.deriveKey(
     { name: 'PBKDF2', salt, iterations: iter, hash: 'SHA-256' },
     base,
@@ -26,22 +36,18 @@ async function deriveKey(code, salt, iter) {
   );
 }
 
-export async function encryptVault(data, code) {
+export async function encryptUser(id, pw, data) {
   const salt = crypto.getRandomValues(new Uint8Array(16));
   const iv = crypto.getRandomValues(new Uint8Array(12));
-  const key = await deriveKey(code, salt, ITER);
+  const key = await deriveKey(id, pw, salt, ITER);
   const ct = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, enc.encode(JSON.stringify(data)));
-  return { v: 1, kdf: 'PBKDF2-SHA256', iter: ITER, salt: b64(salt), iv: b64(iv), data: b64(ct), updatedAt: new Date().toISOString() };
+  return { v: 2, kdf: 'PBKDF2-SHA256', iter: ITER, salt: b64(salt), iv: b64(iv), data: b64(ct) };
 }
 
-export async function decryptVault(vault, code) {
-  const key = await deriveKey(code, unb64(vault.salt), vault.iter);
-  try {
-    const pt = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: unb64(vault.iv) }, key, unb64(vault.data));
-    return JSON.parse(dec.decode(pt));
-  } catch {
-    throw new Error('접속 코드가 맞지 않아요.');
-  }
+export async function decryptUser(id, pw, file) {
+  const key = await deriveKey(id, pw, unb64(file.salt), file.iter);
+  const pt = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: unb64(file.iv) }, key, unb64(file.data));
+  return JSON.parse(dec.decode(pt));
 }
 
 /** GitHub Pages 주소(아이디.github.io/저장소)에서 앱 저장소를 알아낸다 */
@@ -51,24 +57,40 @@ export function appRepo() {
   return m && repo ? { owner: m[1], repo } : null;
 }
 
-export async function fetchVault() {
+async function fetchUserFile(id) {
+  const path = await userFile(id);
   const r = appRepo();
   const urls = [
-    ...(r ? [`https://raw.githubusercontent.com/${r.owner}/${r.repo}/main/${VAULT_PATH}?t=${Date.now()}`] : []),
-    `./vault.json?t=${Date.now()}`,
+    ...(r ? [`https://raw.githubusercontent.com/${r.owner}/${r.repo}/main/${path}?t=${Date.now()}`] : []),
+    `./${path.replace(/^public\//, '')}?t=${Date.now()}`,
   ];
   for (const url of urls) {
     try {
       const res = await fetch(url, { cache: 'no-store' });
-      if (res.ok) {
-        const j = await res.json();
-        if (j?.v === 1 && j.data) return j;
-      }
+      if (res.ok) return await res.json();
     } catch {}
   }
   return null;
 }
 
-export async function publishVault(store, vault) {
-  await store.putText(VAULT_PATH, JSON.stringify(vault, null, 2) + '\n', '접속 코드 설정 갱신');
+export async function login(id, pw) {
+  const file = await fetchUserFile(id);
+  // 아이디가 없는 경우와 비밀번호가 틀린 경우를 구분하지 않는다
+  const fail = new Error('아이디 또는 비밀번호가 올바르지 않아요.');
+  if (!file) throw fail;
+  try {
+    return await decryptUser(id, pw, file);
+  } catch {
+    throw fail;
+  }
+}
+
+/** appStore: 앱 저장소(GitHubStore), 쓰기 권한 필요 */
+export async function publishUser(appStore, id, pw, data) {
+  const file = await encryptUser(id, pw, data);
+  await appStore.putText(await userFile(id), JSON.stringify(file) + '\n', `사용자 ${normId(id)} 설정 갱신`);
+}
+
+export async function removeUser(appStore, id) {
+  await appStore.remove(await userFile(id), `사용자 ${normId(id)} 삭제`);
 }

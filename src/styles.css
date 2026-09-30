@@ -438,3 +438,27 @@ main { min-height: calc(100vh - 140px); }
 .vault-card #vaultStatus svg { color: var(--ok); margin-top: 3px; }
 .btn.danger { background: var(--danger-bg); color: var(--danger); }
 .vault-card { margin-top: 28px; }
+
+/* ---------- login / users ---------- */
+.login { max-width: 400px; margin: 8px auto 12px; text-align: left; padding: 26px; }
+.login label, .users-card label { display: block; font-size: 14px; font-weight: 600; margin: 0 0 14px; }
+.login input, .user-row input, .user-row select {
+  display: block; width: 100%; margin-top: 6px; padding: 13px 14px; font: inherit; font-size: 16px;
+  border-radius: 12px; border: 1px solid var(--line); background: var(--bg-alt); color: var(--text); outline: none;
+}
+.login input:focus, .user-row input:focus, .user-row select:focus { border-color: var(--accent); box-shadow: 0 0 0 4px var(--accent-soft); }
+.login .btn { margin-top: 6px; }
+.login-msg { min-height: 20px; font-size: 14px; color: var(--danger); margin: 10px 0 0; text-align: center; }
+.setup-link { font-size: 13px; color: var(--faint); }
+.user-chip { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px 4px 4px !important; border-radius: 999px; background: var(--bg-alt); color: var(--text) !important; font-weight: 600; }
+.avatar.sm { width: 26px; height: 26px; font-size: 12px; }
+.users-card { margin-top: 28px; }
+.user-row { padding: 14px; border: 1px solid var(--line); border-radius: 16px; margin-bottom: 10px; display: grid; gap: 8px; }
+.user-row input, .user-row select { margin-top: 0; }
+.user-top { display: grid; grid-template-columns: 1fr 130px; gap: 8px; }
+.user-row input[readonly] { opacity: .7; }
+.user-actions { display: flex; align-items: center; gap: 8px; }
+.u-state { flex: 1; font-size: 13px; color: var(--muted); display: inline-flex; gap: 4px; align-items: center; }
+.u-state svg { color: var(--ok); }
+.user-actions .btn { padding: 8px 18px; font-size: 14px; }
+@media (max-width: 520px) { .uname { display: none; } .user-chip { padding: 4px !important; } }

@@ -6,12 +6,13 @@ import { analyzeTimetable, compareVersions, testKey } from './claude.js';
 import { openPdf, pdfToAnalysisImages, pdfThumbnail, renderPagesInto } from './pdf.js';
 import { computeMarks } from './diff.js';
 import { openNaver, openKakao, copyText } from './nav.js';
-import { appRepo, codeProblem, decryptVault, encryptVault, fetchVault, publishVault } from './vault.js';
+import { appRepo, login, normId, passwordProblem, publishUser, removeUser } from './vault.js';
 
 // ---------------------------------------------------------------- 설정
 const SETTINGS_KEY = 'shoot-briefing.settings';
-const DEFAULTS = { mode: 'github', ghOwner: appRepo()?.owner || '', ghRepo: 'shoot-briefing-data', ghToken: '', anthropicKey: '', kakaoKey: '' };
-const VAULT_FIELDS = ['mode', 'ghOwner', 'ghRepo', 'ghToken', 'anthropicKey', 'kakaoKey'];
+const DEFAULTS = { mode: 'github', ghOwner: appRepo()?.owner || '', ghRepo: 'shoot-briefing-data', ghToken: '', anthropicKey: '', kakaoKey: '', viewerToken: '', role: 'admin', userId: '' };
+const SESSION_FIELDS = ['mode', 'ghOwner', 'ghRepo', 'ghToken', 'anthropicKey', 'kakaoKey', 'viewerToken', 'role'];
+const pick = (o, keys) => Object.fromEntries(keys.filter((k) => k in o).map((k) => [k, o[k]]));
 function loadSettings() {
   try {
     return { ...DEFAULTS, ...JSON.parse(localStorage.getItem(SETTINGS_KEY) || '{}') };
@@ -27,7 +28,8 @@ function saveSettings(next) {
 }
 
 const storageReady = () => settings.mode === 'local' || (settings.ghToken && settings.ghOwner && settings.ghRepo);
-const isConfigured = () => storageReady() && settings.anthropicKey;
+const isAdmin = () => settings.role !== 'viewer';
+const isConfigured = () => storageReady() && (!isAdmin() || !!settings.anthropicKey);
 
 let library = null;
 async function getLibrary() {
@@ -111,8 +113,8 @@ function shell(content, { active = '' } = {}) {
       <a class="brand" href="#/">${icon.truck}<span>촬영 브리핑</span></a>
       <nav class="nav-links">
         <a href="#/" class="${active === 'home' ? 'on' : ''}">브리핑</a>
-        <button class="nav-upload" data-action="upload">${icon.upload}<span>타임테이블 올리기</span></button>
-        <a href="#/settings" class="icon-link ${active === 'settings' ? 'on' : ''}" aria-label="설정">${icon.gear}</a>
+        ${isConfigured() && isAdmin() ? `<button class="nav-upload" data-action="upload">${icon.upload}<span>타임테이블 올리기</span></button>` : ''}
+        ${isConfigured() ? `<a href="#/settings" class="user-chip ${active === 'settings' ? 'on' : ''}" aria-label="계정·설정"><span class="avatar sm">${h((settings.userId || '관').slice(0, 1).toUpperCase())}</span><span class="uname">${h(settings.userId || '관리자')}</span></a>` : ''}
       </nav>
     </div>
   </header>
@@ -126,11 +128,16 @@ async function route() {
   window.scrollTo(0, 0);
   try {
     if (parts[0] === 'settings') return renderSettings();
-    if (!isConfigured()) return renderWelcome();
+    if (!isConfigured()) return renderLogin();
     if (parts[0] === 'p' && parts[1]) return await renderProject(parts[1], parts[2]);
     return await renderHome();
   } catch (e) {
     console.error(e);
+    if (e.status === 401) {
+      // 토큰이 만료·폐기됨 → 다시 로그인
+      logout();
+      return renderLogin('로그인 정보가 만료됐어요. 다시 로그인해 주세요.');
+    }
     app.innerHTML = shell(`<section class="section narrow"><div class="empty">
       <h2>불러오지 못했어요</h2><p>${h(e.message)}</p>
       <div class="row-gap"><a class="btn" href="#/settings">설정 확인</a><button class="btn ghost" onclick="location.reload()">다시 시도</button></div></div></section>`);
@@ -138,50 +145,41 @@ async function route() {
 }
 window.addEventListener('hashchange', route);
 
-// ---------------------------------------------------------------- 환영 화면
-async function renderWelcome() {
+// ---------------------------------------------------------------- 로그인
+function renderLogin(message = '') {
   app.innerHTML = shell(`
   <section class="hero welcome">
     <p class="eyebrow">CALL SHEET BRIEFING</p>
     <h1>타임테이블,<br>이제 한눈에.</h1>
-    <p class="lead">PDF를 올리면 Claude가 도착 시간, 촬영지 주소, 이동 동선, 담당자 연락처를 정리해 드려요. 새 버전이 나오면 무엇이 바뀌었는지도 바로 보여드립니다.</p>
-    <form class="unlock" id="unlockForm" hidden>
-      <label for="unlockCode">접속 코드</label>
-      <div class="unlock-row">
-        <input id="unlockCode" type="password" autocomplete="current-password" placeholder="접속 코드 입력" required>
-        <button class="btn" type="submit">열기</button>
-      </div>
-      <p class="unlock-msg" id="unlockMsg"></p>
+    <p class="lead">도착 시간, 촬영지 주소, 이동 동선, 담당자 연락처를 한 화면에. 새 버전이 나오면 무엇이 바뀌었는지 바로 보여드립니다.</p>
+    <form class="login card" id="loginForm">
+      <label>아이디<input name="id" autocomplete="username" autocapitalize="none" spellcheck="false" required></label>
+      <label>비밀번호<input name="pw" type="password" autocomplete="current-password" required></label>
+      <button class="btn large block" type="submit">로그인</button>
+      <p class="login-msg" id="loginMsg">${h(message)}</p>
     </form>
-    <a class="btn large" id="setupBtn" href="#/settings">시작하기</a>
-    <div class="welcome-grid">
-      <div class="feature">${icon.clock}<h3>도착 시간</h3><p>촬영팀 콜타임을 가장 크게.</p></div>
-      <div class="feature">${icon.pin}<h3>바로 길안내</h3><p>네이버지도·카카오로 연결.</p></div>
-      <div class="feature">${icon.swap}<h3>변경사항</h3><p>이전 버전과 자동 비교.</p></div>
-      <div class="feature">${icon.history}<h3>히스토리</h3><p>모든 버전을 보관.</p></div>
-    </div>
+    <a class="text-link setup-link" href="#/settings">관리자 처음 설정</a>
   </section>`);
 
-  const vault = await fetchVault();
-  if (!vault) return;
-  const form = $('#unlockForm');
-  form.hidden = false;
-  $('#setupBtn').className = 'text-link';
-  $('#setupBtn').textContent = '처음부터 직접 설정하기';
-  $('#unlockCode').focus();
+  const form = $('#loginForm');
+  $('input[name=id]', form).focus();
   form.addEventListener('submit', async (e) => {
     e.preventDefault();
     const btn = $('button', form);
+    const { id, pw } = Object.fromEntries(new FormData(form));
     btn.disabled = true;
-    $('#unlockMsg').textContent = '확인 중…';
+    btn.textContent = '확인 중…';
+    $('#loginMsg').textContent = '';
     try {
-      const data = await decryptVault(vault, $('#unlockCode').value);
-      saveSettings(Object.fromEntries(VAULT_FIELDS.filter((k) => k in data).map((k) => [k, data[k]])));
-      toast('이 기기에 설정을 불러왔어요');
+      const data = await login(id, pw);
+      saveSettings({ ...DEFAULTS, ...pick(data, SESSION_FIELDS), userId: normId(id) });
+      toast(`${normId(id)}님, 환영합니다`);
+      location.hash = '#/';
       route();
     } catch (err) {
-      $('#unlockMsg').textContent = err.message;
+      $('#loginMsg').textContent = err.message;
       btn.disabled = false;
+      btn.textContent = '로그인';
     }
   });
 }
@@ -221,7 +219,7 @@ async function renderHome() {
     <section class="hero">
       <p class="eyebrow">CALL SHEET BRIEFING</p>
       <h1>예정된 촬영이 없어요.</h1>
-      <p class="lead">타임테이블 PDF를 올리면 브리핑이 만들어집니다.</p>
+      <p class="lead">${isAdmin() ? '타임테이블 PDF를 올리면 브리핑이 만들어집니다.' : '관리자가 타임테이블을 올리면 여기에 나타나요.'}</p>
     </section>`;
   }
 
@@ -241,13 +239,13 @@ async function renderHome() {
 
   app.innerHTML = shell(`
     ${heroHtml}
-    <section class="section">
+    ${isAdmin() ? `<section class="section">
       <div class="dropzone" data-action="upload" id="dropzone">
         ${icon.upload}
         <strong>타임테이블 PDF 올리기</strong>
         <span>여기로 끌어다 놓거나 눌러서 선택 · 여러 버전을 한 번에 올려도 돼요</span>
       </div>
-    </section>
+    </section>` : ''}
     ${upcoming.length ? `<section class="section"><h2 class="section-title">예정된 촬영</h2><div class="grid">${upcoming.map(card).join('')}</div></section>` : ''}
     ${past.length ? `<section class="section"><h2 class="section-title muted">지난 촬영</h2><div class="grid past">${past.map(card).join('')}</div></section>` : ''}
   `, { active: 'home' });
@@ -296,7 +294,7 @@ async function renderProject(pid, vid) {
       <a class="vchip ${v.id === meta.id ? 'on' : ''}" href="#/p/${encodeURIComponent(pid)}/${v.id}">
         ${h(v.label)}${v.id === latest.id ? '<i>최신</i>' : ''}${v.highChangeCount ? `<b>${v.highChangeCount}</b>` : ''}
       </a>`).join('')}
-    <button class="vchip add" data-action="upload" data-project="${h(pid)}">${icon.upload} 새 버전</button>
+    ${isAdmin() ? `<button class="vchip add" data-action="upload" data-project="${h(pid)}">${icon.upload} 새 버전</button>` : ''}
   </div></div>`;
 
   // --- 변경사항
@@ -486,7 +484,7 @@ async function renderProject(pid, vid) {
             <span class="h-chg">${v === versions[0] ? '첫 버전' : v.changeCount ? `변경 ${v.changeCount}건${v.highChangeCount ? ` (중요 ${v.highChangeCount})` : ''}` : '변경 없음'}</span>
           </div>
         </a>
-        <button class="del" data-del="${v.id}" aria-label="이 버전 삭제">${icon.trash}</button>
+        ${isAdmin() ? `<button class="del" data-del="${v.id}" aria-label="이 버전 삭제">${icon.trash}</button>` : ''}
       </li>`).join('')}
     </ol>
   </section>`;
@@ -545,10 +543,38 @@ async function renderProject(pid, vid) {
 }
 
 // ---------------------------------------------------------------- 설정
-function renderSettings() {
-  const s = settings;
+function logout() {
+  try { localStorage.removeItem(SETTINGS_KEY); } catch {}
+  settings = loadSettings();
+  library = null;
+}
+
+function renderAccount() {
   app.innerHTML = shell(`
-  <section class="hero small"><p class="eyebrow">SETTINGS</p><h1>설정</h1><p class="lead">키와 토큰은 이 기기 브라우저에만 저장됩니다.</p></section>
+  <section class="hero small"><p class="eyebrow">ACCOUNT</p><h1>내 계정</h1><p class="lead">${h(settings.userId)} · 보기 전용</p></section>
+  <section class="section narrow">
+    <div class="card">
+      <div class="card-head">${icon.users}<h2>${h(settings.userId)}</h2></div>
+      <p class="muted small">타임테이블 브리핑을 볼 수 있는 계정이에요. 업로드와 삭제는 관리자만 할 수 있어요.</p>
+      <button type="button" class="btn ghost danger" id="logout">로그아웃</button>
+    </div>
+  </section>`, { active: 'settings' });
+  $('#logout').addEventListener('click', () => { logout(); toast('로그아웃했어요'); location.hash = '#/'; route(); });
+}
+
+const DEFAULT_USERS = [
+  { id: 'jj', role: 'admin' },
+  { id: 'hk', role: 'viewer' },
+  { id: 'sh', role: 'viewer' },
+];
+
+function renderSettings() {
+  if (isConfigured() && !isAdmin()) return renderAccount();
+  const s = settings;
+  const loggedIn = isConfigured();
+  const repo = appRepo();
+  app.innerHTML = shell(`
+  <section class="hero small"><p class="eyebrow">SETTINGS</p><h1>설정</h1><p class="lead">${loggedIn ? `${h(s.userId || '관리자')} · 관리자` : '관리자 처음 설정'}</p></section>
   <section class="section narrow">
     <form id="settingsForm" class="form" autocomplete="off">
       <div class="card">
@@ -559,21 +585,15 @@ function renderSettings() {
       </div>
 
       <div class="card">
-        <div class="card-head">${icon.doc}<h2>저장 위치</h2></div>
-        <div class="seg wide" id="modeSeg">
-          <button type="button" data-mode="github" class="${s.mode === 'github' ? 'on' : ''}">GitHub 비공개 저장소</button>
-          <button type="button" data-mode="local" class="${s.mode === 'local' ? 'on' : ''}">이 기기에만</button>
-        </div>
-        <div id="ghFields" ${s.mode === 'local' ? 'hidden' : ''}>
-          <p class="muted small">폰·PC 어디서든 같은 히스토리를 보려면 GitHub 비공개 저장소에 저장하세요. 토큰은
-            <a href="https://github.com/settings/personal-access-tokens/new" target="_blank" rel="noopener">Fine-grained token</a> →
-            Repository access: <b>Only select repositories</b>에서 <b>shoot-briefing-data</b>${appRepo() ? ` 와 <b>${h(appRepo().repo)}</b>(접속 코드용)` : ''}를 선택 → Permissions: <b>Contents: Read and write</b>로 만드세요.</p>
-          <label>GitHub 아이디<input name="ghOwner" value="${h(s.ghOwner)}" placeholder="예: differ37"></label>
-          <label>데이터 저장소 이름<input name="ghRepo" value="${h(s.ghRepo)}" placeholder="shoot-briefing-data"></label>
-          <label>토큰<input type="password" name="ghToken" value="${h(s.ghToken)}" placeholder="github_pat_..."></label>
-          <button type="button" class="btn ghost" id="testGh">저장소 연결 테스트</button>
-        </div>
-        <p id="localNote" class="muted small" ${s.mode === 'local' ? '' : 'hidden'}>이 브라우저에만 저장돼요. 다른 기기에서는 보이지 않고, 브라우저 데이터를 지우면 사라집니다.</p>
+        <div class="card-head">${icon.doc}<h2>GitHub 저장소</h2></div>
+        <p class="muted small">
+          <a href="https://github.com/settings/personal-access-tokens/new" target="_blank" rel="noopener">Fine-grained token</a> →
+          Repository access: <b>Only select repositories</b>에서 <b>shoot-briefing-data</b>${repo ? `와 <b>${h(repo.repo)}</b>` : ''} 선택 →
+          Permissions: <b>Contents: Read and write</b></p>
+        <label>GitHub 아이디<input name="ghOwner" value="${h(s.ghOwner)}" placeholder="예: differ37"></label>
+        <label>데이터 저장소 이름<input name="ghRepo" value="${h(s.ghRepo)}" placeholder="shoot-briefing-data"></label>
+        <label>관리자 토큰 (읽기+쓰기)<input type="password" name="ghToken" value="${h(s.ghToken)}" placeholder="github_pat_..."></label>
+        <button type="button" class="btn ghost" id="testGh">저장소 연결 테스트</button>
       </div>
 
       <div class="card">
@@ -582,99 +602,167 @@ function renderSettings() {
         <label>JavaScript 키<input name="kakaoKey" value="${h(s.kakaoKey)}" placeholder="선택 사항"></label>
       </div>
 
+      <div class="card">
+        <div class="card-head">${icon.users}<h2>보기 전용 토큰</h2></div>
+        <p class="muted small">보기 전용 계정에 들어갈 토큰이에요. 새 Fine-grained token을 하나 더 만들어
+          <b>shoot-briefing-data</b>만 선택 → Permissions: <b>Contents: Read-only</b>로 설정하세요. 이 토큰으로는 GitHub이 쓰기·삭제를 막아요.</p>
+        <label>보기 전용 토큰 (읽기만)<input type="password" name="viewerToken" value="${h(s.viewerToken)}" placeholder="github_pat_..."></label>
+      </div>
+
       <button class="btn large block" type="submit">저장</button>
     </form>
 
-    <div class="card vault-card form">
-      <div class="card-head">${icon.users}<h2>접속 코드 <span class="opt">다른 기기용</span></h2></div>
-      <p class="muted small">위 설정을 기사님만 아는 코드로 암호화해 올려둡니다. 다른 폰·PC에서는 사이트를 열고 <b>접속 코드만 입력</b>하면 돼요.
-        암호화된 파일은 공개 위치에 놓이므로 <b>영문+숫자 10자 이상</b>을 권장해요. 코드는 어디에도 저장되지 않으니 꼭 기억해 두세요.</p>
-      <p class="small" id="vaultStatus">확인 중…</p>
-      ${appRepo() ? `
-      <label>접속 코드<input type="password" id="vaultCode" autocomplete="new-password" placeholder="영문+숫자 8자 이상"></label>
-      <label>한 번 더<input type="password" id="vaultCode2" autocomplete="new-password"></label>
-      <button type="button" class="btn ghost" id="saveVault">접속 코드 저장</button>` : '<p class="muted small">GitHub Pages 주소에서 열었을 때만 쓸 수 있어요.</p>'}
+    <div class="card users-card form" id="usersCard">
+      <div class="card-head">${icon.users}<h2>사용자 관리</h2></div>
+      ${repo ? `<p class="muted small">아이디와 비밀번호로 로그인할 계정이에요. <b>관리자</b>는 올리기·삭제·설정까지, <b>보기 전용</b>은 브리핑 보기만 할 수 있어요.
+        비밀번호는 어디에도 그대로 저장되지 않아요. 비밀번호를 바꾸거나 위 설정(키·토큰)을 바꿨다면 해당 계정을 다시 저장하세요.</p>
+      <div id="userRows"><p class="muted small">불러오는 중…</p></div>
+      <button type="button" class="btn ghost" id="addUser">+ 사용자 추가</button>` : '<p class="muted small">GitHub Pages 주소에서 열었을 때만 쓸 수 있어요.</p>'}
     </div>
 
-    <div class="card">
+    ${loggedIn ? `<div class="card">
       <div class="card-head">${icon.trash}<h2>이 기기에서 로그아웃</h2></div>
-      <p class="muted small">이 브라우저에 저장된 키와 토큰을 지웁니다. 저장된 타임테이블(GitHub)은 그대로 남아요.</p>
+      <p class="muted small">이 브라우저에 저장된 키와 토큰을 지웁니다. 저장된 타임테이블은 그대로 남아요.</p>
       <button type="button" class="btn ghost danger" id="logout">로그아웃</button>
-    </div>
+    </div>` : ''}
   </section>`, { active: 'settings' });
 
-  fetchVault().then((v) => {
-    const el = $('#vaultStatus');
-    if (el) el.innerHTML = v ? `${icon.check} 접속 코드가 설정돼 있어요 (${h(new Date(v.updatedAt).toLocaleString('ko-KR'))}). 새로 저장하면 이전 코드는 더 이상 쓸 수 없어요.` : '아직 접속 코드가 없어요.';
-  });
-  $('#logout').addEventListener('click', (e) => {
-    if (!e.target.classList.contains('confirm')) { e.target.classList.add('confirm'); e.target.textContent = '정말 로그아웃할까요? 한 번 더 누르세요'; return; }
-    try { localStorage.removeItem(SETTINGS_KEY); } catch {}
-    settings = loadSettings();
-    library = null;
-    toast('로그아웃했어요');
-    location.hash = '#/';
-  });
-
   const form = $('#settingsForm');
-  let mode = s.mode;
-  $$('#modeSeg button').forEach((b) => b.addEventListener('click', () => {
-    mode = b.dataset.mode;
-    $$('#modeSeg button').forEach((x) => x.classList.toggle('on', x === b));
-    $('#ghFields').hidden = mode === 'local';
-    $('#localNote').hidden = mode !== 'local';
-  }));
-  const values = () => ({ ...Object.fromEntries(new FormData(form)), mode });
   const trimAll = (o) => Object.fromEntries(Object.entries(o).map(([k, v]) => [k, typeof v === 'string' ? v.trim() : v]));
+  const values = () => ({ ...trimAll(Object.fromEntries(new FormData(form))), mode: 'github' });
 
   $('#testClaude').addEventListener('click', async (e) => {
-    const key = values().anthropicKey.trim();
+    const key = values().anthropicKey;
     if (!key) return toast('API 키를 입력하세요');
     e.target.textContent = '확인 중…';
     try { await testKey(key); toast('Claude 연결 성공'); } catch (err) { toast('실패: ' + (err.status ? `${err.status} ` : '') + (err.error?.error?.message || err.message)); }
     e.target.textContent = '연결 테스트';
   });
   $('#testGh').addEventListener('click', async (e) => {
-    const v = trimAll(values());
+    const v = values();
     e.target.textContent = '확인 중…';
     try { await new GitHubStore({ token: v.ghToken, owner: v.ghOwner, repo: v.ghRepo }).check(); toast('저장소 연결 성공 (비공개 확인됨)'); } catch (err) { toast(err.message); }
     e.target.textContent = '저장소 연결 테스트';
   });
-  $('#saveVault')?.addEventListener('click', async (e) => {
-    const v = trimAll(values());
-    const code = $('#vaultCode').value;
-    const problem = codeProblem(code);
-    if (problem) return toast(problem);
-    if (code !== $('#vaultCode2').value) return toast('두 코드가 달라요');
-    if (v.mode !== 'github' || !v.ghToken || !v.anthropicKey) return toast('Claude 키와 GitHub 저장소 설정을 먼저 채워 주세요');
-    e.target.textContent = '암호화해서 올리는 중…';
-    e.target.disabled = true;
-    try {
-      const vault = await encryptVault(Object.fromEntries(VAULT_FIELDS.map((k) => [k, v[k]])), code);
-      const r = appRepo();
-      await publishVault(new GitHubStore({ token: v.ghToken, owner: r.owner, repo: r.repo }), vault);
-      saveSettings(v);
-      $('#vaultCode').value = $('#vaultCode2').value = '';
-      $('#vaultStatus').innerHTML = `${icon.check} 접속 코드를 저장했어요. 이제 다른 기기에서 코드만 입력하면 됩니다.`;
-      toast('접속 코드를 저장했어요');
-    } catch (err) {
-      toast(err.status === 403 || err.status === 404
-        ? `토큰에 ${appRepo().repo} 저장소 쓰기 권한이 없어요. 토큰 설정에서 저장소를 추가해 주세요.`
-        : err.message);
-    }
-    e.target.textContent = '접속 코드 저장';
-    e.target.disabled = false;
+  $('#logout')?.addEventListener('click', (e) => {
+    if (!e.target.classList.contains('confirm')) { e.target.classList.add('confirm'); e.target.textContent = '정말 로그아웃할까요? 한 번 더 누르세요'; return; }
+    logout();
+    toast('로그아웃했어요');
+    location.hash = '#/';
   });
+
+  async function validateAndSave() {
+    const v = values();
+    if (!v.anthropicKey || !v.ghToken || !v.ghOwner || !v.ghRepo) throw new Error('Claude 키와 GitHub 설정을 모두 채워 주세요');
+    await new GitHubStore({ token: v.ghToken, owner: v.ghOwner, repo: v.ghRepo }).check();
+    saveSettings({ ...v, role: 'admin' });
+    return v;
+  }
 
   form.addEventListener('submit', async (e) => {
     e.preventDefault();
-    const v = trimAll(values());
-    if (v.mode === 'github' && v.ghToken) {
-      try { await new GitHubStore({ token: v.ghToken, owner: v.ghOwner, repo: v.ghRepo }).check(); } catch (err) { return toast(err.message); }
-    }
-    saveSettings(v);
+    try { await validateAndSave(); } catch (err) { return toast(err.message); }
     toast('저장했어요');
     location.hash = '#/';
+  });
+
+  // ----- 사용자 관리
+  if (!repo) return;
+  const rowsEl = $('#userRows');
+  let users = [];
+  const usersPath = 'users.json';
+  const dataStore = () => new GitHubStore({ token: settings.ghToken, owner: settings.ghOwner, repo: settings.ghRepo });
+
+  const renderRows = () => {
+    rowsEl.innerHTML = users.map((u, i) => `
+      <div class="user-row" data-i="${i}">
+        <div class="user-top">
+          <input class="u-id" value="${h(u.id)}" placeholder="아이디" ${u.saved ? 'readonly' : ''} autocapitalize="none" spellcheck="false">
+          <select class="u-role">
+            <option value="viewer" ${u.role !== 'admin' ? 'selected' : ''}>보기 전용</option>
+            <option value="admin" ${u.role === 'admin' ? 'selected' : ''}>관리자</option>
+          </select>
+        </div>
+        <input class="u-pw" type="password" autocomplete="new-password" placeholder="${u.saved ? '새 비밀번호 (바꿀 때만)' : '비밀번호'}">
+        <div class="user-actions">
+          <span class="u-state">${u.saved ? `${icon.check} 저장됨${u.updatedAt ? ` · ${h(new Date(u.updatedAt).toLocaleDateString('ko-KR'))}` : ''}` : '아직 저장 안 됨'}</span>
+          <button type="button" class="btn ghost u-save">저장</button>
+          ${u.saved ? `<button type="button" class="del u-del" aria-label="삭제">${icon.trash}</button>` : ''}
+        </div>
+      </div>`).join('');
+  };
+
+  const saveIndex = () => dataStore().putText(usersPath, JSON.stringify({ users: users.filter((u) => u.saved).map(({ id, role, updatedAt }) => ({ id, role, updatedAt })) }, null, 2), '사용자 목록 갱신');
+
+  (async () => {
+    if (!storageReady()) { users = DEFAULT_USERS.map((u) => ({ ...u })); renderRows(); return; }
+    try {
+      const text = await dataStore().getText(usersPath);
+      users = text ? JSON.parse(text).users.map((u) => ({ ...u, saved: true })) : DEFAULT_USERS.map((u) => ({ ...u }));
+    } catch { users = DEFAULT_USERS.map((u) => ({ ...u })); }
+    renderRows();
+  })();
+
+  $('#addUser').addEventListener('click', () => { users.push({ id: '', role: 'viewer' }); renderRows(); });
+
+  rowsEl.addEventListener('click', async (e) => {
+    const row = e.target.closest('.user-row');
+    if (!row) return;
+    const i = Number(row.dataset.i);
+    const u = users[i];
+    const appStore = () => new GitHubStore({ token: settings.ghToken, owner: repo.owner, repo: repo.repo });
+    const permErr = (err) => (err.status === 403 || err.status === 404
+      ? `관리자 토큰에 ${repo.repo} 저장소 쓰기 권한이 없어요. 토큰 설정에서 저장소를 추가해 주세요.`
+      : err.message);
+
+    if (e.target.closest('.u-del')) {
+      const b = e.target.closest('.u-del');
+      if (!b.classList.contains('confirm')) { b.classList.add('confirm'); b.textContent = '삭제?'; return; }
+      try {
+        await removeUser(appStore(), u.id);
+        users.splice(i, 1);
+        await saveIndex();
+        renderRows();
+        toast(`${u.id} 계정을 삭제했어요`);
+      } catch (err) { toast(permErr(err)); }
+      return;
+    }
+
+    if (!e.target.closest('.u-save')) return;
+    const btn = e.target.closest('.u-save');
+    const id = normId($('.u-id', row).value);
+    const role = $('.u-role', row).value;
+    const pw = $('.u-pw', row).value;
+    if (!/^[a-z0-9._-]{2,20}$/.test(id)) return toast('아이디는 영문 소문자·숫자 2~20자로 해주세요');
+    if (users.some((x, k) => k !== i && x.id === id)) return toast('이미 있는 아이디예요');
+    if (!pw) return toast('비밀번호를 입력하세요');
+    const problem = passwordProblem(pw);
+    if (problem) return toast(problem);
+
+    btn.disabled = true;
+    btn.textContent = '저장 중…';
+    try {
+      const v = await validateAndSave();
+      if (role === 'viewer' && !v.viewerToken) throw new Error('보기 전용 토큰을 먼저 입력하세요');
+      if (role === 'viewer') {
+        const test = new GitHubStore({ token: v.viewerToken, owner: v.ghOwner, repo: v.ghRepo });
+        await test.getText('index.json').catch(() => { throw new Error('보기 전용 토큰으로 데이터 저장소를 읽을 수 없어요. 토큰을 확인하세요.'); });
+      }
+      const base = { mode: 'github', ghOwner: v.ghOwner, ghRepo: v.ghRepo, kakaoKey: v.kakaoKey };
+      const data = role === 'admin'
+        ? { ...base, role, ghToken: v.ghToken, anthropicKey: v.anthropicKey, viewerToken: v.viewerToken }
+        : { ...base, role, ghToken: v.viewerToken };
+      await publishUser(appStore(), id, pw, data);
+      Object.assign(u, { id, role, saved: true, updatedAt: new Date().toISOString() });
+      await saveIndex();
+      if (!settings.userId && role === 'admin') saveSettings({ userId: id });
+      renderRows();
+      toast(`${id} 계정을 저장했어요`);
+    } catch (err) {
+      toast(permErr(err));
+      btn.disabled = false;
+      btn.textContent = '저장';
+    }
   });
 }
 
@@ -693,7 +781,7 @@ picker.addEventListener('change', () => {
 document.addEventListener('click', (e) => {
   const t = e.target.closest('[data-action="upload"]');
   if (!t) return;
-  if (!isConfigured()) { toast('먼저 설정을 완료해 주세요'); location.hash = '#/settings'; return; }
+  if (!isConfigured() || !isAdmin()) return;
   pickerProject = t.dataset.project || null;
   picker.click();
 });
