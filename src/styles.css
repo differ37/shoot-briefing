@@ -551,3 +551,37 @@ main { min-height: calc(100vh - 140px); }
 .past-box[open] summary > svg { transform: rotate(90deg); }
 .past-box .shoot-list { opacity: .8; }
 .past-box .sr-date { background: var(--bg-alt); color: var(--muted); }
+
+/* ---------- 시간 작성 ---------- */
+.mini-btn {
+  display: inline-flex; align-items: center; gap: 4px; margin-left: 10px; vertical-align: 3px;
+  border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent); background: var(--accent-soft); color: var(--accent);
+  font-size: 13px; font-weight: 700; padding: 4px 11px; border-radius: 999px; cursor: pointer;
+}
+.mini-btn svg { width: 14px; height: 14px; }
+.chain { list-style: none; margin: 0 0 18px; padding: 0; display: flex; align-items: stretch; gap: 26px; flex-wrap: wrap; }
+.chain li { position: relative; display: flex; flex-direction: column; gap: 2px; }
+.chain li:not(:last-child)::after { content: '→'; position: absolute; right: -19px; top: 50%; transform: translateY(-50%); opacity: .5; font-weight: 700; }
+.chain span { font-size: 12px; font-weight: 600; opacity: .7; }
+.chain b { font-size: 22px; font-weight: 800; font-variant-numeric: tabular-nums; letter-spacing: -0.02em; }
+.chain li.arrive b { color: #2997ff; }
+.chain.on-dark { color: var(--hero-card-text); padding: 12px 16px; background: rgba(255,255,255,0.07); border-radius: 16px; align-self: flex-start; }
+.featured .chain { margin: 2px 0 10px; }
+@media (max-width: 520px) {
+  .chain { gap: 22px; }
+  .chain b { font-size: 19px; }
+  .chain li:not(:last-child)::after { right: -16px; }
+}
+.prep-sheet label { display: flex; align-items: center; gap: 10px; padding: 12px 0; border-bottom: 1px solid var(--line); font-weight: 600; }
+.prep-sheet label svg, .prep-arrive svg { color: var(--accent); width: 20px; height: 20px; }
+.prep-sheet label span, .prep-arrive span { flex: 1; }
+.prep-sheet input[type=time] {
+  font: inherit; font-size: 20px; font-weight: 700; padding: 8px 12px; border-radius: 12px; min-width: 130px;
+  border: 1px solid var(--line); background: var(--bg-alt); color: var(--text); outline: none; font-variant-numeric: tabular-nums;
+}
+.prep-sheet input[type=time]:focus { border-color: var(--accent); box-shadow: 0 0 0 4px var(--accent-soft); }
+.prep-arrive { display: flex; align-items: center; gap: 10px; padding: 14px 0 6px; font-weight: 600; color: var(--muted); }
+.prep-arrive b { font-size: 20px; color: var(--text); padding-right: 12px; }
+.prep-hint { margin: 4px 0 8px; }
+.sheet-actions .spacer { flex: 1; }
+.chain.on-dark { width: fit-content; max-width: 100%; }

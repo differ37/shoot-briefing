@@ -191,6 +191,16 @@ export class Library {
     return { project, meta };
   }
 
+  /** 장비집 집합/출발 시간 (버전과 무관하게 촬영 단위로 저장) */
+  async setPrep(pid, { gather = '', depart = '' }) {
+    await this.load();
+    const project = this.project(pid);
+    if (!project) throw new Error('촬영을 찾을 수 없어요.');
+    if (gather || depart) project.prep = { gather, depart, updatedAt: new Date().toISOString() };
+    else delete project.prep;
+    await this.saveIndex(`시간 기록: ${project.title}`);
+  }
+
   async deleteVersion(pid, vid) {
     await this.load();
     const project = this.project(pid);

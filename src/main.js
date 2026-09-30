@@ -108,6 +108,17 @@ const titleLines = (t) => {
   return `<strong>${h(first)}</strong>${rest.map((r) => `<span class="sub">${h(r)}</span>`).join('')}`;
 };
 
+// 장비집 집합 → 장비집 출발 → 촬영팀 도착
+const prepChain = (prep, callTime, cls = '') => {
+  if (!prep?.gather && !prep?.depart) return '';
+  const steps = [
+    ['장비집 집합', prep.gather],
+    ['장비집 출발', prep.depart],
+    ['촬영팀 도착', callTime || '—'],
+  ].filter(([, t]) => t);
+  return `<ol class="chain ${cls}">${steps.map(([label, t], i) => `<li class="${i === steps.length - 1 ? 'arrive' : ''}"><span>${label}</span><b>${h(t)}</b></li>`).join('')}</ol>`;
+};
+
 const isPlaceholderPhone = (p) => !p || /0000-?0000/.test(p);
 const telHref = (p) => 'tel:' + String(p).replace(/[^\d+]/g, '');
 const smsHref = (p) => 'sms:' + String(p).replace(/[^\d+]/g, '');
@@ -237,6 +248,7 @@ async function renderHome() {
             <span class="call-time">${h(a.my_call?.time || '—')}</span>
             <span class="call-place">${icon.pin}${h(a.my_call?.location_name || '')}</span>
           </div>
+          ${prepChain(next.prep, a.my_call?.time, 'on-dark')}
           ${a.headline ? flow(a.headline, 'on-dark') : ''}
           ${latest.highChangeCount ? `<p class="hero-alert">${icon.alert} 최신 ${h(latest.label)} · 중요한 변경 ${latest.highChangeCount}건</p>` : ''}
           <span class="call-go">브리핑 보기 ${icon.chevron}</span>
@@ -263,7 +275,7 @@ async function renderHome() {
       <div class="sr-body">
         <strong>${h(p.title)}</strong>
         <span class="sr-sub">${h(p.production || p.shootType || '')}</span>
-        <span class="sr-call" data-call>${p.callTime ? `${icon.clock}${h(p.callTime)} 도착 · ${h(p.callPlace || '')}` : ''}</span>
+        <span class="sr-call" data-call>${p.callTime ? `${icon.clock}${p.prep?.gather ? `${h(p.prep.gather)} 집합 · ` : ''}${h(p.callTime)} 도착 · ${h(p.callPlace || '')}` : ''}</span>
       </div>
       <div class="sr-side">
         <span class="sr-dday">${h(dday(p.date))}</span>
@@ -307,7 +319,7 @@ async function renderHome() {
     lib.getVersion(p.id, lib.latest(p).id).then((rec) => {
       const mc = rec?.analysis?.my_call;
       const el = $(`.shoot-row[data-pid="${CSS.escape(p.id)}"] [data-call]`);
-      if (mc?.time && el) el.innerHTML = `${icon.clock}${h(mc.time)} 도착 · ${h(mc.location_name || '')}`;
+      if (mc?.time && el) el.innerHTML = `${icon.clock}${p.prep?.gather ? `${h(p.prep.gather)} 집합 · ` : ''}${h(mc.time)} 도착 · ${h(mc.location_name || '')}`;
     }).catch(() => {});
   }
 }
@@ -335,7 +347,7 @@ async function renderProject(pid, vid) {
     <div class="hero-text">
       <p class="eyebrow">${h([prod.production_company, prod.shoot_type].filter(Boolean).join(' · ') || 'CALL SHEET')}</p>
       <h1>${h(prod.project_title || project.title)}</h1>
-      <p class="lead">${h(prettyDate(prod.shoot_date || project.date, prod.weekday))} <span class="dday">${h(dday(prod.shoot_date || project.date))}</span></p>
+      <p class="lead">${h(prettyDate(prod.shoot_date || project.date, prod.weekday))} <span class="dday">${h(dday(prod.shoot_date || project.date))}</span>${isAdmin() ? `<button type="button" class="mini-btn" id="prepBtn">${icon.clock}시간 작성</button>` : ''}</p>
       <div class="ver-line">
         <span class="pill ${isLatest ? 'latest' : 'old'}">${isLatest ? '최신' : '이전 버전'} · ${h(meta.label)}</span>
         ${rec.changes ? `<span class="pill ${rec.changes.changes.length ? 'warn' : ''}">${h(rec.changes.againstLabel)} 대비 변경 ${rec.changes.changes.length}건</span>` : '<span class="pill">첫 버전</span>'}
@@ -396,6 +408,7 @@ async function renderProject(pid, vid) {
   <section class="section">
     <div class="call-card">
       <div class="call-main">
+        ${prepChain(project.prep, mc.time, 'on-dark')}
         <span class="call-label">${icon.camera} 촬영팀 도착</span>
         <div class="call-time-xl">${h(mc.time || '—')}${marks.myCall.time ? `<span class="badge chg">변경</span><span class="before">${h(marks.myCall.time)}</span>` : ''}</div>
         <div class="call-where">
@@ -550,6 +563,7 @@ async function renderProject(pid, vid) {
 
   app.innerHTML = shell(hero + switcher + changesHtml + myCall + routeHtml + callsHtml + schedHtml + checksHtml + contactsHtml + historyHtml);
   hydrateThumbs(lib);
+  $('#prepBtn')?.addEventListener('click', () => openPrepModal(lib, project, mc.time));
 
   // 이벤트
   $$('[data-nav]').forEach((b) => b.addEventListener('click', () => {
@@ -599,6 +613,55 @@ async function renderProject(pid, vid) {
       if (b.dataset.del === meta.id) location.hash = `#/p/${encodeURIComponent(pid)}`; else route();
     } else location.hash = '#/';
   }));
+}
+
+// ---------------------------------------------------------------- 시간 작성 팝업
+function openPrepModal(lib, project, callTime) {
+  const prep = project.prep || {};
+  const el = document.createElement('div');
+  el.className = 'sheet-backdrop';
+  el.innerHTML = `
+  <form class="sheet prep-sheet" autocomplete="off">
+    <p class="eyebrow">${h(project.title)}</p>
+    <h2>시간 작성</h2>
+    <label>${icon.users}<span>장비집 집합</span><input type="time" name="gather" value="${h(prep.gather || '')}"></label>
+    <label>${icon.truck}<span>장비집 출발</span><input type="time" name="depart" value="${h(prep.depart || '')}"></label>
+    <div class="prep-arrive">${icon.camera}<span>촬영팀 도착</span><b>${h(callTime || '—')}</b></div>
+    <p class="muted small prep-hint">타임테이블 기준 도착 시간이에요. 새 버전이 올라와도 기록한 시간은 그대로 유지돼요.</p>
+    <div class="sheet-actions">
+      ${prep.gather || prep.depart ? '<button type="button" class="btn ghost danger" data-clear>지우기</button>' : ''}
+      <span class="spacer"></span>
+      <button type="button" class="btn ghost" data-cancel>취소</button>
+      <button type="submit" class="btn">저장</button>
+    </div>
+  </form>`;
+  document.body.appendChild(el);
+  requestAnimationFrame(() => el.classList.add('show'));
+  const close = () => { el.classList.remove('show'); setTimeout(() => el.remove(), 300); };
+  const form = $('form', el);
+  $('input[name=gather]', form).focus();
+  el.addEventListener('click', (e) => { if (e.target === el) close(); });
+  $('[data-cancel]', form).addEventListener('click', close);
+
+  const save = async (values) => {
+    $$('button', form).forEach((b) => (b.disabled = true));
+    try {
+      await lib.setPrep(project.id, values);
+      close();
+      toast(values.gather || values.depart ? '시간을 저장했어요' : '시간을 지웠어요');
+      route();
+    } catch (err) {
+      toast(err.status === 403 || err.status === 404 ? '저장 권한이 없어요' : err.message);
+      $$('button', form).forEach((b) => (b.disabled = false));
+    }
+  };
+  $('[data-clear]', form)?.addEventListener('click', () => save({ gather: '', depart: '' }));
+  form.addEventListener('submit', (e) => {
+    e.preventDefault();
+    const { gather, depart } = Object.fromEntries(new FormData(form));
+    if (!gather && !depart) return toast('시간을 하나 이상 입력하세요');
+    save({ gather, depart });
+  });
 }
 
 // ---------------------------------------------------------------- 설정
