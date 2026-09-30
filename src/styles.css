@@ -421,3 +421,20 @@ main { min-height: calc(100vh - 140px); }
 .steps li.fail { color: var(--danger); font-weight: 700; }
 .steps li.fail .dot { background: var(--danger); border-color: var(--danger); }
 .sheet .eyebrow { text-transform: none; }
+
+/* ---------- unlock ---------- */
+.unlock { max-width: 420px; margin: 0 auto 16px; text-align: left; }
+.unlock label { font-size: 14px; font-weight: 600; color: var(--muted); }
+.unlock-row { display: flex; gap: 8px; margin-top: 8px; }
+.unlock-row input {
+  flex: 1; min-width: 0; padding: 14px 18px; font: inherit; font-size: 17px; border-radius: 999px;
+  border: 1px solid var(--line); background: var(--card); color: var(--text); outline: none; box-shadow: var(--shadow);
+}
+.unlock-row input:focus { border-color: var(--accent); box-shadow: 0 0 0 4px var(--accent-soft); }
+.unlock-row .btn { padding: 0 24px; }
+.unlock-msg { min-height: 20px; font-size: 14px; color: var(--danger); margin: 8px 0 0 18px; }
+.text-link { display: inline-block; font-size: 15px; font-weight: 600; }
+.vault-card #vaultStatus { display: flex; gap: 6px; align-items: flex-start; }
+.vault-card #vaultStatus svg { color: var(--ok); margin-top: 3px; }
+.btn.danger { background: var(--danger-bg); color: var(--danger); }
+.vault-card { margin-top: 28px; }

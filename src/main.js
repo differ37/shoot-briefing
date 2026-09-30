@@ -6,14 +6,17 @@ import { analyzeTimetable, compareVersions, testKey } from './claude.js';
 import { openPdf, pdfToAnalysisImages, pdfThumbnail, renderPagesInto } from './pdf.js';
 import { computeMarks } from './diff.js';
 import { openNaver, openKakao, copyText } from './nav.js';
+import { appRepo, codeProblem, decryptVault, encryptVault, fetchVault, publishVault } from './vault.js';
 
 // ---------------------------------------------------------------- 설정
 const SETTINGS_KEY = 'shoot-briefing.settings';
+const DEFAULTS = { mode: 'github', ghOwner: appRepo()?.owner || '', ghRepo: 'shoot-briefing-data', ghToken: '', anthropicKey: '', kakaoKey: '' };
+const VAULT_FIELDS = ['mode', 'ghOwner', 'ghRepo', 'ghToken', 'anthropicKey', 'kakaoKey'];
 function loadSettings() {
   try {
-    return { mode: 'github', ghOwner: '', ghRepo: 'shoot-briefing-data', ghToken: '', anthropicKey: '', kakaoKey: '', ...JSON.parse(localStorage.getItem(SETTINGS_KEY) || '{}') };
+    return { ...DEFAULTS, ...JSON.parse(localStorage.getItem(SETTINGS_KEY) || '{}') };
   } catch {
-    return { mode: 'github', ghOwner: '', ghRepo: 'shoot-briefing-data', ghToken: '', anthropicKey: '', kakaoKey: '' };
+    return { ...DEFAULTS };
   }
 }
 let settings = loadSettings();
@@ -136,13 +139,21 @@ async function route() {
 window.addEventListener('hashchange', route);
 
 // ---------------------------------------------------------------- 환영 화면
-function renderWelcome() {
+async function renderWelcome() {
   app.innerHTML = shell(`
   <section class="hero welcome">
     <p class="eyebrow">CALL SHEET BRIEFING</p>
     <h1>타임테이블,<br>이제 한눈에.</h1>
     <p class="lead">PDF를 올리면 Claude가 도착 시간, 촬영지 주소, 이동 동선, 담당자 연락처를 정리해 드려요. 새 버전이 나오면 무엇이 바뀌었는지도 바로 보여드립니다.</p>
-    <a class="btn large" href="#/settings">시작하기</a>
+    <form class="unlock" id="unlockForm" hidden>
+      <label for="unlockCode">접속 코드</label>
+      <div class="unlock-row">
+        <input id="unlockCode" type="password" autocomplete="current-password" placeholder="접속 코드 입력" required>
+        <button class="btn" type="submit">열기</button>
+      </div>
+      <p class="unlock-msg" id="unlockMsg"></p>
+    </form>
+    <a class="btn large" id="setupBtn" href="#/settings">시작하기</a>
     <div class="welcome-grid">
       <div class="feature">${icon.clock}<h3>도착 시간</h3><p>촬영팀 콜타임을 가장 크게.</p></div>
       <div class="feature">${icon.pin}<h3>바로 길안내</h3><p>네이버지도·카카오로 연결.</p></div>
@@ -150,6 +161,29 @@ function renderWelcome() {
       <div class="feature">${icon.history}<h3>히스토리</h3><p>모든 버전을 보관.</p></div>
     </div>
   </section>`);
+
+  const vault = await fetchVault();
+  if (!vault) return;
+  const form = $('#unlockForm');
+  form.hidden = false;
+  $('#setupBtn').className = 'text-link';
+  $('#setupBtn').textContent = '처음부터 직접 설정하기';
+  $('#unlockCode').focus();
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const btn = $('button', form);
+    btn.disabled = true;
+    $('#unlockMsg').textContent = '확인 중…';
+    try {
+      const data = await decryptVault(vault, $('#unlockCode').value);
+      saveSettings(Object.fromEntries(VAULT_FIELDS.filter((k) => k in data).map((k) => [k, data[k]])));
+      toast('이 기기에 설정을 불러왔어요');
+      route();
+    } catch (err) {
+      $('#unlockMsg').textContent = err.message;
+      btn.disabled = false;
+    }
+  });
 }
 
 // ---------------------------------------------------------------- 홈
@@ -533,7 +567,7 @@ function renderSettings() {
         <div id="ghFields" ${s.mode === 'local' ? 'hidden' : ''}>
           <p class="muted small">폰·PC 어디서든 같은 히스토리를 보려면 GitHub 비공개 저장소에 저장하세요. 토큰은
             <a href="https://github.com/settings/personal-access-tokens/new" target="_blank" rel="noopener">Fine-grained token</a> →
-            Repository access: <b>Only select repositories</b>에서 데이터 저장소만 선택 → Permissions: <b>Contents: Read and write</b>로 만드세요.</p>
+            Repository access: <b>Only select repositories</b>에서 <b>shoot-briefing-data</b>${appRepo() ? ` 와 <b>${h(appRepo().repo)}</b>(접속 코드용)` : ''}를 선택 → Permissions: <b>Contents: Read and write</b>로 만드세요.</p>
           <label>GitHub 아이디<input name="ghOwner" value="${h(s.ghOwner)}" placeholder="예: differ37"></label>
           <label>데이터 저장소 이름<input name="ghRepo" value="${h(s.ghRepo)}" placeholder="shoot-briefing-data"></label>
           <label>토큰<input type="password" name="ghToken" value="${h(s.ghToken)}" placeholder="github_pat_..."></label>
@@ -550,7 +584,37 @@ function renderSettings() {
 
       <button class="btn large block" type="submit">저장</button>
     </form>
+
+    <div class="card vault-card form">
+      <div class="card-head">${icon.users}<h2>접속 코드 <span class="opt">다른 기기용</span></h2></div>
+      <p class="muted small">위 설정을 기사님만 아는 코드로 암호화해 올려둡니다. 다른 폰·PC에서는 사이트를 열고 <b>접속 코드만 입력</b>하면 돼요.
+        암호화된 파일은 공개 위치에 놓이므로 <b>영문+숫자 10자 이상</b>을 권장해요. 코드는 어디에도 저장되지 않으니 꼭 기억해 두세요.</p>
+      <p class="small" id="vaultStatus">확인 중…</p>
+      ${appRepo() ? `
+      <label>접속 코드<input type="password" id="vaultCode" autocomplete="new-password" placeholder="영문+숫자 8자 이상"></label>
+      <label>한 번 더<input type="password" id="vaultCode2" autocomplete="new-password"></label>
+      <button type="button" class="btn ghost" id="saveVault">접속 코드 저장</button>` : '<p class="muted small">GitHub Pages 주소에서 열었을 때만 쓸 수 있어요.</p>'}
+    </div>
+
+    <div class="card">
+      <div class="card-head">${icon.trash}<h2>이 기기에서 로그아웃</h2></div>
+      <p class="muted small">이 브라우저에 저장된 키와 토큰을 지웁니다. 저장된 타임테이블(GitHub)은 그대로 남아요.</p>
+      <button type="button" class="btn ghost danger" id="logout">로그아웃</button>
+    </div>
   </section>`, { active: 'settings' });
+
+  fetchVault().then((v) => {
+    const el = $('#vaultStatus');
+    if (el) el.innerHTML = v ? `${icon.check} 접속 코드가 설정돼 있어요 (${h(new Date(v.updatedAt).toLocaleString('ko-KR'))}). 새로 저장하면 이전 코드는 더 이상 쓸 수 없어요.` : '아직 접속 코드가 없어요.';
+  });
+  $('#logout').addEventListener('click', (e) => {
+    if (!e.target.classList.contains('confirm')) { e.target.classList.add('confirm'); e.target.textContent = '정말 로그아웃할까요? 한 번 더 누르세요'; return; }
+    try { localStorage.removeItem(SETTINGS_KEY); } catch {}
+    settings = loadSettings();
+    library = null;
+    toast('로그아웃했어요');
+    location.hash = '#/';
+  });
 
   const form = $('#settingsForm');
   let mode = s.mode;
@@ -576,6 +640,32 @@ function renderSettings() {
     try { await new GitHubStore({ token: v.ghToken, owner: v.ghOwner, repo: v.ghRepo }).check(); toast('저장소 연결 성공 (비공개 확인됨)'); } catch (err) { toast(err.message); }
     e.target.textContent = '저장소 연결 테스트';
   });
+  $('#saveVault')?.addEventListener('click', async (e) => {
+    const v = trimAll(values());
+    const code = $('#vaultCode').value;
+    const problem = codeProblem(code);
+    if (problem) return toast(problem);
+    if (code !== $('#vaultCode2').value) return toast('두 코드가 달라요');
+    if (v.mode !== 'github' || !v.ghToken || !v.anthropicKey) return toast('Claude 키와 GitHub 저장소 설정을 먼저 채워 주세요');
+    e.target.textContent = '암호화해서 올리는 중…';
+    e.target.disabled = true;
+    try {
+      const vault = await encryptVault(Object.fromEntries(VAULT_FIELDS.map((k) => [k, v[k]])), code);
+      const r = appRepo();
+      await publishVault(new GitHubStore({ token: v.ghToken, owner: r.owner, repo: r.repo }), vault);
+      saveSettings(v);
+      $('#vaultCode').value = $('#vaultCode2').value = '';
+      $('#vaultStatus').innerHTML = `${icon.check} 접속 코드를 저장했어요. 이제 다른 기기에서 코드만 입력하면 됩니다.`;
+      toast('접속 코드를 저장했어요');
+    } catch (err) {
+      toast(err.status === 403 || err.status === 404
+        ? `토큰에 ${appRepo().repo} 저장소 쓰기 권한이 없어요. 토큰 설정에서 저장소를 추가해 주세요.`
+        : err.message);
+    }
+    e.target.textContent = '접속 코드 저장';
+    e.target.disabled = false;
+  });
+
   form.addEventListener('submit', async (e) => {
     e.preventDefault();
     const v = trimAll(values());
