@@ -85,6 +85,29 @@ const badge = (mark) => {
   return `<span class="badge chg">변경</span>${mark.before ? `<span class="before">${h(mark.before)}</span>` : ''}`;
 };
 
+// 긴 문장을 문장 단위로 끊어 줄바꿈해서 보여준다
+const splitSentences = (t) => String(t ?? '')
+  .split(/\n+/)
+  .flatMap((part) => part.split(/(?<=[가-힣)\]"'’”][.!?])\s+/))
+  .map((s) => s.trim())
+  .filter(Boolean);
+const para = (t, cls = '') => {
+  const ls = splitSentences(t);
+  return ls.length ? `<div class="lines ${cls}">${ls.map((l) => `<p>${h(l)}</p>`).join('')}</div>` : '';
+};
+// "A → B → C" 흐름은 단계별 세로 목록으로
+const flow = (t, cls = '') => {
+  let steps = String(t ?? '').split(/\s*(?:→|->|⇒|▶)\s*/).map((s) => s.trim()).filter(Boolean);
+  if (steps.length < 2) steps = String(t ?? '').split(/,\s+/).map((s) => s.trim()).filter(Boolean);
+  if (steps.length < 2) return para(t, cls);
+  return `<ol class="flow ${cls}">${steps.map((s) => `<li>${h(s)}</li>`).join('')}</ol>`;
+};
+// "점심 / 세팅 / 크로마키" 같은 제목은 첫 항목만 굵게, 나머지는 아래 줄로
+const titleLines = (t) => {
+  const [first, ...rest] = String(t ?? '').split(/\s+\/\s+/);
+  return `<strong>${h(first)}</strong>${rest.map((r) => `<span class="sub">${h(r)}</span>`).join('')}`;
+};
+
 const isPlaceholderPhone = (p) => !p || /0000-?0000/.test(p);
 const telHref = (p) => 'tel:' + String(p).replace(/[^\d+]/g, '');
 const smsHref = (p) => 'sms:' + String(p).replace(/[^\d+]/g, '');
@@ -192,65 +215,101 @@ async function renderHome() {
   const projects = [...lib.index.projects].sort((a, b) => (a.date || '9999').localeCompare(b.date || '9999'));
   const upcoming = projects.filter((p) => !p.date || new Date(p.date + 'T00:00:00') >= today);
   const past = projects.filter((p) => !upcoming.includes(p)).reverse();
-  const next = upcoming[0];
+  const [next, ...later] = upcoming;
+  const href = (p) => `#/p/${encodeURIComponent(p.id)}`;
 
-  let heroHtml = '';
+  // --- 다가오는 촬영 (1건 크게)
+  let featured = '';
   if (next) {
     const latest = lib.latest(next);
     const rec = await lib.getVersion(next.id, latest.id);
     const a = rec?.analysis || {};
-    heroHtml = `
-    <section class="hero home-hero">
-      <p class="eyebrow">${h(dday(next.date))} · 다음 촬영</p>
-      <h1>${h(next.title)}</h1>
-      <p class="lead">${h(prettyDate(next.date, next.weekday))}${next.production ? ` · ${h(next.production)}` : ''}</p>
-      <a class="call-hero" href="#/p/${encodeURIComponent(next.id)}">
-        <div>
-          <span class="call-label">촬영팀 도착</span>
-          <span class="call-time">${h(a.my_call?.time || '—')}</span>
-          <span class="call-place">${icon.pin}${h(a.my_call?.location_name || '')}</span>
+    featured = `
+    <section class="section home-top">
+      <h2 class="section-title">${icon.flag} 다가오는 촬영</h2>
+      <a class="featured" href="${href(next)}">
+        <div class="f-main">
+          <div class="f-meta"><span class="dday-pill">${h(dday(next.date))}</span><span>${h(prettyDate(next.date, next.weekday))}</span></div>
+          <strong class="f-title">${h(next.title)}</strong>
+          ${next.production ? `<span class="f-prod">${h(next.production)}</span>` : ''}
+          <div class="f-call">
+            <span class="call-label">${icon.camera} 촬영팀 도착</span>
+            <span class="call-time">${h(a.my_call?.time || '—')}</span>
+            <span class="call-place">${icon.pin}${h(a.my_call?.location_name || '')}</span>
+          </div>
+          ${a.headline ? flow(a.headline, 'on-dark') : ''}
+          ${latest.highChangeCount ? `<p class="hero-alert">${icon.alert} 최신 ${h(latest.label)} · 중요한 변경 ${latest.highChangeCount}건</p>` : ''}
+          <span class="call-go">브리핑 보기 ${icon.chevron}</span>
         </div>
-        <span class="call-go">브리핑 보기 ${icon.chevron}</span>
+        <div class="f-thumb"><img alt="" data-thumb="${h(next.id)}/${h(latest.id)}"></div>
       </a>
-      ${latest.highChangeCount ? `<p class="hero-alert">${icon.alert} 최신 버전(${h(latest.label)})에서 중요한 변경 ${latest.highChangeCount}건</p>` : ''}
     </section>`;
   } else {
-    heroHtml = `
+    featured = `
     <section class="hero">
       <p class="eyebrow">CALL SHEET BRIEFING</p>
       <h1>예정된 촬영이 없어요.</h1>
-      <p class="lead">${isAdmin() ? '타임테이블 PDF를 올리면 브리핑이 만들어집니다.' : '관리자가 타임테이블을 올리면 여기에 나타나요.'}</p>
+      <p class="lead">${isAdmin() ? '타임테이블 PDF를 올리면<br>브리핑이 만들어집니다.' : '관리자가 타임테이블을 올리면<br>여기에 나타나요.'}</p>
     </section>`;
   }
 
-  const card = (p) => {
+  // --- 촬영 목록 (한 줄씩, 월별로 묶음)
+  const row = (p) => {
     const latest = lib.latest(p);
+    const [, m, d] = (p.date || '').split('-').map(Number);
     return `
-    <a class="project-card" href="#/p/${encodeURIComponent(p.id)}">
-      <div class="thumb"><img alt="" data-thumb="${h(p.id)}/${h(latest.id)}"></div>
-      <div class="pc-body">
-        <span class="pc-date">${h(prettyDate(p.date, p.weekday))} <b>${h(dday(p.date))}</b></span>
+    <a class="shoot-row" href="${href(p)}" data-pid="${h(p.id)}">
+      <div class="sr-date">${p.date ? `<b>${m}.${d}</b><span>${h(p.weekday || '일월화수목금토'[new Date(p.date + 'T00:00:00').getDay()])}</span>` : '<b>미정</b>'}</div>
+      <div class="sr-body">
         <strong>${h(p.title)}</strong>
-        <span class="pc-meta">${h(p.production || p.shootType || '')}</span>
-        <span class="pc-ver">${icon.history}${p.versions.length}개 버전 · 최신 ${h(latest.label)}${latest.highChangeCount ? ` <em>변경 ${latest.highChangeCount}</em>` : ''}</span>
+        <span class="sr-sub">${h(p.production || p.shootType || '')}</span>
+        <span class="sr-call" data-call>${p.callTime ? `${icon.clock}${h(p.callTime)} 도착 · ${h(p.callPlace || '')}` : ''}</span>
       </div>
+      <div class="sr-side">
+        <span class="sr-dday">${h(dday(p.date))}</span>
+        ${latest.highChangeCount ? `<span class="sr-chg">변경 ${latest.highChangeCount}</span>` : `<span class="sr-ver">${h(latest.label)}</span>`}
+      </div>
+      ${icon.chevron}
     </a>`;
+  };
+  const byMonth = (list) => {
+    const groups = new Map();
+    for (const p of list) {
+      const key = p.date ? `${Number(p.date.slice(0, 4))}년 ${Number(p.date.slice(5, 7))}월` : '날짜 미정';
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key).push(p);
+    }
+    return [...groups].map(([k, ps]) => `<h3 class="month">${h(k)}</h3><div class="shoot-list">${ps.map(row).join('')}</div>`).join('');
   };
 
   app.innerHTML = shell(`
-    ${heroHtml}
+    ${featured}
+    ${later.length ? `<section class="section"><h2 class="section-title">${icon.clock} 예정된 촬영 <span class="count">${later.length}</span></h2>${byMonth(later)}</section>` : ''}
     ${isAdmin() ? `<section class="section">
       <div class="dropzone" data-action="upload" id="dropzone">
         ${icon.upload}
         <strong>타임테이블 PDF 올리기</strong>
-        <span>여기로 끌어다 놓거나 눌러서 선택 · 여러 버전을 한 번에 올려도 돼요</span>
+        <span>여기로 끌어다 놓거나 눌러서 선택하세요.<br>여러 버전을 한 번에 올려도 돼요.</span>
       </div>
     </section>` : ''}
-    ${upcoming.length ? `<section class="section"><h2 class="section-title">예정된 촬영</h2><div class="grid">${upcoming.map(card).join('')}</div></section>` : ''}
-    ${past.length ? `<section class="section"><h2 class="section-title muted">지난 촬영</h2><div class="grid past">${past.map(card).join('')}</div></section>` : ''}
+    ${past.length ? `<section class="section">
+      <details class="past-box">
+        <summary><span>${icon.history} 지난 촬영</span><span class="count">${past.length}</span>${icon.chevron}</summary>
+        ${byMonth(past)}
+      </details>
+    </section>` : ''}
   `, { active: 'home' });
   hydrateThumbs(lib);
   bindDrop($('#dropzone'));
+
+  // 예전에 올린 촬영은 목록에 도착 시간이 없으니 최신 분석에서 채운다
+  for (const p of later.filter((x) => !x.callTime).slice(0, 20)) {
+    lib.getVersion(p.id, lib.latest(p).id).then((rec) => {
+      const mc = rec?.analysis?.my_call;
+      const el = $(`.shoot-row[data-pid="${CSS.escape(p.id)}"] [data-call]`);
+      if (mc?.time && el) el.innerHTML = `${icon.clock}${h(mc.time)} 도착 · ${h(mc.location_name || '')}`;
+    }).catch(() => {});
+  }
 }
 
 // ---------------------------------------------------------------- 프로젝트 브리핑
@@ -282,7 +341,7 @@ async function renderProject(pid, vid) {
         ${rec.changes ? `<span class="pill ${rec.changes.changes.length ? 'warn' : ''}">${h(rec.changes.againstLabel)} 대비 변경 ${rec.changes.changes.length}건</span>` : '<span class="pill">첫 버전</span>'}
       </div>
       ${!isLatest ? `<a class="old-banner" href="#/p/${encodeURIComponent(pid)}">${icon.alert} 지금 보고 있는 건 예전 버전이에요. 최신(${h(latest.label)}) 보기 ${icon.chevron}</a>` : ''}
-      ${a.headline ? `<p class="headline">${h(a.headline)}</p>` : ''}
+      ${a.headline ? `<div class="headline">${flow(a.headline)}</div>` : ''}
     </div>
     <div class="hero-visual"><img alt="타임테이블 미리보기" data-thumb="${h(pid)}/${h(meta.id)}"></div>
   </section>`;
@@ -304,7 +363,7 @@ async function renderProject(pid, vid) {
   <section class="section">
     <div class="card changes ${changes.changes.length ? '' : 'none'}">
       <div class="card-head">${icon.swap}<h2>${h(changes.againstLabel)} → ${h(meta.label)} 변경사항</h2></div>
-      <p class="changes-summary">${h(changes.summary)}</p>
+      ${para(changes.summary, 'changes-summary')}
       ${changes.changes.length ? `<ul class="change-list">
         ${[...changes.changes].sort((x, y) => order[x.importance] - order[y.importance]).map((c) => `
         <li class="imp-${c.importance}">
@@ -314,7 +373,7 @@ async function renderProject(pid, vid) {
             <span class="arrow">→</span>
             ${c.after ? `<span class="v-after">${h(c.after)}</span>` : '<span class="v-after empty">삭제</span>'}
           </div>` : ''}
-          ${c.driver_impact ? `<p class="impact">${icon.truck}${h(c.driver_impact)}</p>` : ''}
+          ${c.driver_impact ? `<div class="impact">${icon.truck}${para(c.driver_impact)}</div>` : ''}
         </li>`).join('')}
       </ul>` : ''}
     </div>
@@ -343,7 +402,7 @@ async function renderProject(pid, vid) {
           <strong>${h(mc.location_name || myLoc.name || '')}</strong>${marks.myCall.location ? badge({ type: 'changed', before: marks.myCall.location }) : ''}
           <span>${h(myAddr)}</span>${marks.myCall.address ? badge({ type: 'changed', before: marks.myCall.address }) : ''}
         </div>
-        ${mc.note ? `<p class="call-note">${h(mc.note)}</p>` : ''}
+        ${mc.note ? para(mc.note, 'call-note') : ''}
       </div>
       ${navBtns({ name: mc.location_name, address: myAddr }, 0)}
     </div>
@@ -353,7 +412,7 @@ async function renderProject(pid, vid) {
       <div class="stat"><span>종료 예정</span><strong>${h(a.wrap_time || '—')}</strong>${marks.wrap ? `<span class="badge chg">변경</span><span class="before">${h(marks.wrap)}</span>` : ''}</div>
       <div class="stat"><span>담당자</span><strong>${(a.contacts || []).length}명</strong></div>
     </div>
-    ${a.briefing ? `<div class="card briefing"><div class="card-head">${icon.sparkle}<h2>브리핑</h2></div><p>${h(a.briefing)}</p></div>` : ''}
+    ${a.briefing ? `<div class="card briefing"><div class="card-head">${icon.sparkle}<h2>브리핑</h2></div>${para(a.briefing)}</div>` : ''}
   </section>`;
 
   // --- 동선 (촬영지 + 이동)
@@ -373,7 +432,7 @@ async function renderProject(pid, vid) {
         <div class="stop-head"><strong>${h(l.name)}</strong>${badge(marks.locations.get(i))}</div>
         <span class="stop-role">${h([l.role, l.time_range].filter(Boolean).join(' · '))}</span>
         <p class="stop-addr">${icon.pin}${h(l.address || '주소 없음')}</p>
-        ${l.note ? `<p class="stop-note">${h(l.note)}</p>` : ''}
+        ${l.note ? para(l.note, 'stop-note') : ''}
         ${navBtns(l, i + 1)}
       </div>
     </li>`;
@@ -426,9 +485,9 @@ async function renderProject(pid, vid) {
         <div class="tl-time"><strong>${s.next_day ? '<i>익일</i>' : ''}${h(s.start)}</strong><span>${h(s.end)}</span></div>
         <div class="tl-body">
           <div class="tl-head"><span class="tl-kind">${h(s.kind)}</span>${tracks.length > 1 && s.track ? `<span class="tl-track">${h(s.track)}</span>` : ''}${s.minutes ? `<span class="tl-min">${s.minutes}분</span>` : ''}${badge(marks.schedule.get(s.i))}</div>
-          <strong>${h(s.title)}</strong>
+          <div class="tl-title">${titleLines(s.title)}</div>
           ${s.location_name ? `<span class="tl-loc">${h(s.location_name)}</span>` : ''}
-          ${s.details ? `<p>${h(s.details)}</p>` : ''}
+          ${s.details ? para(s.details, 'tl-details') : ''}
         </div>
       </li>`).join('')}
     </ol>
@@ -441,7 +500,7 @@ async function renderProject(pid, vid) {
   <section class="section">
     <h2 class="section-title">${icon.flag} 체크사항</h2>
     <ul class="checks">
-      ${checks.map((c) => `<li class="lv-${c.level}">${lv[c.level]?.[0] || ''}<span class="lv">${lv[c.level]?.[1] || ''}</span><p>${h(c.text)}</p>${badge(marks.checks.get(c.i))}</li>`).join('')}
+      ${checks.map((c) => `<li class="lv-${c.level}">${lv[c.level]?.[0] || ''}<span class="lv">${lv[c.level]?.[1] || ''}</span>${para(c.text, 'check-text')}${badge(marks.checks.get(c.i))}</li>`).join('')}
     </ul>
   </section>` : '';
 

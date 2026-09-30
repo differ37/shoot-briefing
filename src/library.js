@@ -182,6 +182,11 @@ export class Library {
 
     project.versions.push(meta);
     project.updatedAt = now;
+    if (!nextMeta) {
+      // 홈 목록에서 바로 보여줄 최신 도착 정보
+      project.callTime = analysis.my_call?.time || '';
+      project.callPlace = analysis.my_call?.location_name || '';
+    }
     await this.saveIndex(`목록 갱신: ${msg}`);
     return { project, meta };
   }
