@@ -950,7 +950,8 @@ function renderSettings() {
     const u = users[i];
     const appStore = () => new GitHubStore({ token: settings.ghToken, owner: repo.owner, repo: repo.repo });
     const permErr = (err) => (err.status === 403 || err.status === 404
-      ? `관리자 토큰에 ${repo.repo} 저장소 쓰기 권한이 없어요. 토큰 설정에서 저장소를 추가해 주세요.`
+      ? `관리자 토큰에 ${repo.repo} 저장소 쓰기 권한이 없어요. GitHub 토큰 설정에서 ${repo.repo} 저장소를 추가하고 Update를 눌러 주세요.`
+      : err.status === 401 ? '토큰이 올바르지 않거나 만료됐어요.'
       : err.message);
 
     if (e.target.closest('.u-del')) {
@@ -997,9 +998,13 @@ function renderSettings() {
       renderRows();
       toast(`${id} 계정을 저장했어요`);
     } catch (err) {
-      toast(permErr(err));
+      console.error(err);
+      const msg = permErr(err);
+      toast(msg);
+      // 토스트는 금방 사라지니 실패 이유를 줄에 계속 남긴다
+      $('.u-state', row).innerHTML = `<span class="u-err">${icon.alert} 저장 실패: ${h(msg)}</span>`;
       btn.disabled = false;
-      btn.textContent = '저장';
+      btn.textContent = '다시 저장';
     }
   });
 }

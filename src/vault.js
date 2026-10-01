@@ -76,8 +76,8 @@ async function fetchUserFile(id) {
 export async function login(id, pw) {
   const file = await fetchUserFile(id);
   // 아이디가 없는 경우와 비밀번호가 틀린 경우를 구분하지 않는다
-  const fail = new Error('아이디 또는 비밀번호가 올바르지 않아요.');
-  if (!file) throw fail;
+  const fail = new Error('비밀번호가 올바르지 않아요.');
+  if (!file) throw new Error('아직 설정되지 않은 계정이에요. jj 계정의 설정 → 사용자 관리에서 이 계정을 저장해 주세요.');
   try {
     return await decryptUser(id, pw, file);
   } catch {
