@@ -29,7 +29,7 @@ npm run build
 - `src/storage.js` — `GitHubStore`(Contents API) / `LocalStore`(IndexedDB) / `PrefixedStore`(사람별 폴더)
 - `src/vault.js` — 아이디/비밀번호 로그인(서버 없음), 공개 계정 목록
 - `src/diff.js` — 이전 버전 대비 항목별 NEW/변경 배지
-- `src/nav.js` — 네이버지도·카카오맵/내비 연결
+- `src/nav.js` — 네이버지도·카카오맵/내비 연결. 카카오 JS 키는 `main.js`의 `SITE_KAKAO_KEY`(공개 키·도메인 제한, Kakao Developers 앱 'beta test'에서 카카오맵 사용 설정 ON 필요). 계정별 설정의 키가 있으면 그게 우선
 - `src/profiles.js` — 표시 이름·얼굴 아이콘(jj=준연/정/아이언맨풍, hk=효권/서/슈퍼맨풍, sh=신훈/강/배트맨풍, 자체 SVG)
 
 ## 계정·권한

@@ -12,6 +12,10 @@ import { appRepo, fetchAccounts, login, normId, passwordProblem, publishAccounts
 // ---------------------------------------------------------------- 설정
 const SETTINGS_KEY = 'shoot-briefing.settings';
 const DEFAULTS = { mode: 'github', ghOwner: appRepo()?.owner || '', ghRepo: 'shoot-briefing-data', ghToken: '', anthropicKey: '', kakaoKey: '', memberToken: '', role: 'admin', userId: '' };
+// 카카오 JavaScript 키는 원래 웹페이지에 공개되는 키(등록 도메인에서만 동작)라 코드에 둔다.
+// 계정별 설정에 키가 없어도(휴대폰 로그인 등) 모두 카카오내비를 쓸 수 있게 기본값으로 쓴다.
+const SITE_KAKAO_KEY = 'ed6d44e1aede2abe26408146305d8ef2';
+const kakaoKey = () => settings.kakaoKey || SITE_KAKAO_KEY;
 const SESSION_FIELDS = ['mode', 'ghOwner', 'ghRepo', 'ghToken', 'anthropicKey', 'kakaoKey', 'memberToken', 'role'];
 const pick = (o, keys) => Object.fromEntries(keys.filter((k) => k in o).map((k) => [k, o[k]]));
 function loadSettings() {
@@ -506,7 +510,7 @@ async function renderProject(space, pid, vid) {
   const navBtns = (loc, idx) => `
     <div class="nav-btns">
       <button class="btn nav naver" data-nav="naver" data-loc="${idx}">${icon.naver}네이버지도</button>
-      <button class="btn nav kakao" data-nav="kakao" data-loc="${idx}">${icon.kakao}${settings.kakaoKey ? '카카오내비' : '카카오맵'}</button>
+      <button class="btn nav kakao" data-nav="kakao" data-loc="${idx}">${icon.kakao}${kakaoKey() ? '카카오내비' : '카카오맵'}</button>
       <button class="btn nav copy" data-copy="${h(loc.address || loc.name || '')}" aria-label="주소 복사">${icon.copy}</button>
     </div>`;
   const navTargets = [{ name: mc.location_name || myLoc.name, address: myAddr }, ...locs];
@@ -676,7 +680,7 @@ async function renderProject(space, pid, vid) {
   $$('[data-nav]').forEach((b) => b.addEventListener('click', () => {
     const loc = navTargets[Number(b.dataset.loc)] || {};
     if (!loc.address && !loc.name) return toast('주소 정보가 없어요');
-    b.dataset.nav === 'naver' ? openNaver(loc) : openKakao(loc, settings.kakaoKey, toast);
+    b.dataset.nav === 'naver' ? openNaver(loc) : openKakao(loc, kakaoKey(), toast);
   }));
   $$('[data-copy]').forEach((b) => b.addEventListener('click', async () => toast((await copyText(b.dataset.copy)) ? '주소를 복사했어요' : '복사하지 못했어요')));
   $$('#trackSeg button').forEach((b) => b.addEventListener('click', () => {
@@ -829,8 +833,8 @@ function renderSettings() {
 
       <div class="card">
         <div class="card-head">${icon.kakao}<h2>카카오내비 바로 실행 <span class="opt">선택</span></h2></div>
-        <p class="muted small">비워두면 카카오맵에서 주소를 검색해 길찾기를 누르면 됩니다. <a href="https://developers.kakao.com/console/app" target="_blank" rel="noopener">Kakao Developers</a>에서 앱을 만들고 <b>JavaScript 키</b>를 넣으면, 휴대폰에서 버튼 한 번으로 카카오내비 안내가 바로 시작돼요. (앱 설정 → 플랫폼 → Web 사이트 도메인에 <code>${h(location.origin)}</code> 등록 필요)</p>
-        <label>JavaScript 키<input name="kakaoKey" value="${h(s.kakaoKey)}" placeholder="선택 사항"></label>
+        <p class="muted small">비워두면 사이트 기본 키를 써요. <a href="https://developers.kakao.com/console/app" target="_blank" rel="noopener">Kakao Developers</a>에서 앱을 만들고 <b>JavaScript 키</b>를 넣으면, 휴대폰에서 버튼 한 번으로 카카오내비 안내가 바로 시작돼요. (앱 설정 → 플랫폼 → Web 사이트 도메인에 <code>${h(location.origin)}</code> 등록 필요)</p>
+        <label>JavaScript 키<input name="kakaoKey" value="${h(s.kakaoKey)}" placeholder="비우면 사이트 기본 키"></label>
       </div>
 
       <div class="card">
