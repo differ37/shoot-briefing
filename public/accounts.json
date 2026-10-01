@@ -7,6 +7,10 @@
     {
       "id": "hk",
       "role": "member"
+    },
+    {
+      "id": "sh",
+      "role": "member"
     }
   ]
 }
