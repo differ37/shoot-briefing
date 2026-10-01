@@ -24,6 +24,7 @@ export const icon = {
   users: svg('<circle cx="9" cy="8" r="3.5"/><path d="M2.5 20a6.5 6.5 0 0 1 13 0"/><path d="M16 4.5a3.5 3.5 0 0 1 0 7M18 14.5a6.5 6.5 0 0 1 3.5 5.5"/>'),
   trash: svg('<path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"/>'),
   flag: svg('<path d="M5 21V4M5 4h11l-2 4 2 4H5"/>'),
+  menu: svg('<path d="M4 7h16M4 12h16M4 17h16"/>'),
   naver: '<span class="brand-mark naver">N</span>',
   kakao: '<span class="brand-mark kakao">K</span>',
 };

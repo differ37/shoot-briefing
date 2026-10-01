@@ -144,3 +144,17 @@ export class LocalStore {
   putBlob(path, blob) { return this.tx('readwrite', (s) => s.put(blob, path)); }
   remove(path) { return this.tx('readwrite', (s) => s.delete(path)); }
 }
+
+/** 같은 저장소 안에서 사람별 폴더(spaces/<아이디>/)로 나눠 쓰기 위한 래퍼 */
+export class PrefixedStore {
+  constructor(store, prefix) {
+    this.store = store;
+    this.prefix = prefix;
+    this.kind = store.kind;
+  }
+  getText(path) { return this.store.getText(this.prefix + path); }
+  getBlob(path) { return this.store.getBlob(this.prefix + path); }
+  putText(path, text, message) { return this.store.putText(this.prefix + path, text, message); }
+  putBlob(path, blob, message) { return this.store.putBlob(this.prefix + path, blob, message); }
+  remove(path, message) { return this.store.remove(this.prefix + path, message); }
+}

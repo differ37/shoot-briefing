@@ -94,3 +94,23 @@ export async function publishUser(appStore, id, pw, data) {
 export async function removeUser(appStore, id) {
   await appStore.remove(await userFile(id), `사용자 ${normId(id)} 삭제`);
 }
+
+// 로그인 화면의 계정 선택용 공개 목록 (아이디·권한만, 비밀 정보 없음)
+const ACCOUNTS_PATH = 'public/accounts.json';
+export async function fetchAccounts() {
+  const r = appRepo();
+  const urls = [
+    ...(r ? [`https://raw.githubusercontent.com/${r.owner}/${r.repo}/main/${ACCOUNTS_PATH}?t=${Date.now()}`] : []),
+    `./accounts.json?t=${Date.now()}`,
+  ];
+  for (const url of urls) {
+    try {
+      const res = await fetch(url, { cache: 'no-store' });
+      if (res.ok) return (await res.json()).accounts || [];
+    } catch {}
+  }
+  return null;
+}
+export async function publishAccounts(appStore, list) {
+  await appStore.putText(ACCOUNTS_PATH, JSON.stringify({ accounts: list }, null, 2) + '\n', '계정 목록 갱신');
+}

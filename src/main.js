@@ -1,21 +1,23 @@
 import './styles.css';
 import { icon } from './icons.js';
-import { GitHubStore, LocalStore } from './storage.js';
+import { GitHubStore, LocalStore, PrefixedStore } from './storage.js';
 import { Library, versionKeyFromName } from './library.js';
 import { analyzeTimetable, compareVersions, testKey } from './claude.js';
 import { openPdf, pdfToAnalysisImages, pdfThumbnail, renderPagesInto } from './pdf.js';
 import { computeMarks } from './diff.js';
 import { openNaver, openKakao, copyText } from './nav.js';
-import { appRepo, login, normId, passwordProblem, publishUser, removeUser } from './vault.js';
+import { appRepo, fetchAccounts, login, normId, passwordProblem, publishAccounts, publishUser, removeUser } from './vault.js';
 
 // ---------------------------------------------------------------- 설정
 const SETTINGS_KEY = 'shoot-briefing.settings';
-const DEFAULTS = { mode: 'github', ghOwner: appRepo()?.owner || '', ghRepo: 'shoot-briefing-data', ghToken: '', anthropicKey: '', kakaoKey: '', viewerToken: '', role: 'admin', userId: '' };
-const SESSION_FIELDS = ['mode', 'ghOwner', 'ghRepo', 'ghToken', 'anthropicKey', 'kakaoKey', 'viewerToken', 'role'];
+const DEFAULTS = { mode: 'github', ghOwner: appRepo()?.owner || '', ghRepo: 'shoot-briefing-data', ghToken: '', anthropicKey: '', kakaoKey: '', memberToken: '', role: 'admin', userId: '' };
+const SESSION_FIELDS = ['mode', 'ghOwner', 'ghRepo', 'ghToken', 'anthropicKey', 'kakaoKey', 'memberToken', 'role'];
 const pick = (o, keys) => Object.fromEntries(keys.filter((k) => k in o).map((k) => [k, o[k]]));
 function loadSettings() {
   try {
-    return { ...DEFAULTS, ...JSON.parse(localStorage.getItem(SETTINGS_KEY) || '{}') };
+    const saved = JSON.parse(localStorage.getItem(SETTINGS_KEY) || '{}');
+    if (saved.viewerToken && !saved.memberToken) saved.memberToken = saved.viewerToken; // 예전 이름
+    return { ...DEFAULTS, ...saved };
   } catch {
     return { ...DEFAULTS };
   }
@@ -24,24 +26,55 @@ let settings = loadSettings();
 function saveSettings(next) {
   settings = { ...settings, ...next };
   try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings)); } catch {}
-  library = null;
+  libraries.clear();
+  accounts = null;
 }
 
 const storageReady = () => settings.mode === 'local' || (settings.ghToken && settings.ghOwner && settings.ghRepo);
-const isAdmin = () => settings.role !== 'viewer';
-const isConfigured = () => storageReady() && (!isAdmin() || !!settings.anthropicKey);
+const isAdmin = () => settings.role === 'admin';
+// 예전 "보기 전용" 계정은 키 없이도 볼 수는 있게
+const isConfigured = () => storageReady() && (settings.role === 'viewer' || !!settings.anthropicKey);
 
-let library = null;
-async function getLibrary() {
-  if (!library) {
-    const store = settings.mode === 'local'
-      ? new LocalStore()
-      : new GitHubStore({ token: settings.ghToken, owner: settings.ghOwner, repo: settings.ghRepo });
-    library = new Library(store);
-    await library.load();
-  }
-  return library;
+// ---- 사람별 공간: 관리자(jj)의 공간은 저장소 루트(기존 데이터), 나머지는 spaces/<아이디>/
+const ADMIN_SPACE = '_admin';
+// 예전 방식(아이디 없이 관리자 설정)으로 쓰던 기기는 계정 목록의 관리자 아이디로 본다
+const mySpace = () => settings.userId || (settings.role === 'admin' && accounts?.find((x) => x.role === 'admin')?.id) || ADMIN_SPACE;
+let accounts = null; // [{id, role}]
+async function loadAccounts() {
+  if (accounts) return accounts;
+  let list = [];
+  try {
+    const text = await baseStore().getText('users.json');
+    if (text) list = JSON.parse(text).users.map(({ id, role }) => ({ id, role: role === 'viewer' ? 'member' : role }));
+  } catch {}
+  accounts = list;
+  if (!list.some((x) => x.id === mySpace())) list.unshift({ id: mySpace(), role: settings.role });
+  return accounts;
 }
+const roleOf = (space) => (space === ADMIN_SPACE ? 'admin' : accounts?.find((a) => a.id === space)?.role);
+const spacePrefix = (space) => (roleOf(space) === 'admin' ? '' : `spaces/${space}/`);
+const spaceName = (space) => (space === ADMIN_SPACE ? '관리자' : space);
+// 쓰기: 관리자는 모든 공간, 나머지는 자기 공간만 (예전 보기 전용 계정은 쓰기 불가)
+const canEdit = (space) => settings.role !== 'viewer' && (isAdmin() || space === mySpace());
+const canUpload = (space) => canEdit(space) && !!settings.anthropicKey;
+
+function baseStore() {
+  return settings.mode === 'local'
+    ? new LocalStore()
+    : new GitHubStore({ token: settings.ghToken, owner: settings.ghOwner, repo: settings.ghRepo });
+}
+const libraries = new Map();
+async function getLibrary(space = mySpace()) {
+  await loadAccounts();
+  if (!libraries.has(space)) {
+    const lib = new Library(new PrefixedStore(baseStore(), spacePrefix(space)));
+    lib.space = space;
+    libraries.set(space, lib.load().then(() => lib));
+  }
+  return libraries.get(space);
+}
+let currentSpace = null;
+const L = (space, pid, vid) => `#/s/${encodeURIComponent(space)}${pid ? `/p/${encodeURIComponent(pid)}${vid ? `/${encodeURIComponent(vid)}` : ''}` : ''}`;
 
 // ---------------------------------------------------------------- 유틸
 const app = document.getElementById('app');
@@ -125,7 +158,7 @@ const smsHref = (p) => 'sms:' + String(p).replace(/[^\d+]/g, '');
 
 const thumbUrls = new Map();
 async function loadThumb(lib, pid, vid) {
-  const key = `${pid}/${vid}`;
+  const key = `${lib.space}/${pid}/${vid}`;
   if (!thumbUrls.has(key)) {
     thumbUrls.set(key, lib.getThumb(pid, vid).then((b) => (b ? URL.createObjectURL(b) : null)).catch(() => null));
   }
@@ -144,27 +177,71 @@ function shell(content, { active = '' } = {}) {
   return `
   <header class="nav">
     <div class="nav-inner">
+      ${isConfigured() ? `<button class="menu-btn" data-action="drawer" aria-label="계정 메뉴">${icon.menu}</button>` : ''}
       <a class="brand" href="#/">${icon.truck}<span>촬영 브리핑</span></a>
       <nav class="nav-links">
-        <a href="#/" class="${active === 'home' ? 'on' : ''}">브리핑</a>
-        ${isConfigured() && isAdmin() ? `<button class="nav-upload" data-action="upload">${icon.upload}<span>타임테이블 올리기</span></button>` : ''}
-        ${isConfigured() ? `<a href="#/settings" class="user-chip ${active === 'settings' ? 'on' : ''}" aria-label="계정·설정"><span class="avatar sm">${h((settings.userId || '관').slice(0, 1).toUpperCase())}</span><span class="uname">${h(settings.userId || '관리자')}</span></a>` : ''}
+        ${isConfigured() && currentSpace && canUpload(currentSpace) ? `<button class="nav-upload" data-action="upload">${icon.upload}<span>타임테이블 올리기</span></button>` : ''}
+        ${isConfigured() ? `<button class="user-chip" data-action="drawer" aria-label="계정 메뉴"><span class="avatar sm">${h(spaceName(mySpace()).slice(0, 1).toUpperCase())}</span><span class="uname">${h(spaceName(mySpace()))}</span></button>` : ''}
       </nav>
     </div>
   </header>
+  ${isConfigured() && currentSpace && currentSpace !== mySpace() && active !== 'settings' ? `
+  <div class="space-banner"><div>
+    <span class="avatar sm">${h(spaceName(currentSpace).slice(0, 1).toUpperCase())}</span>
+    <span><b>${h(spaceName(currentSpace))}</b>님의 스케줄 · ${canEdit(currentSpace) ? '편집 가능' : '보기 전용'}</span>
+    <a href="${L(mySpace())}">내 브리핑으로 ${icon.chevron}</a>
+  </div></div>` : ''}
   <main>${content}</main>
   <footer class="foot">촬영팀 장비차량 기사용 타임테이블 브리핑 · Claude가 분석한 내용은 반드시 원본과 함께 확인하세요.</footer>`;
 }
+
+// ---------------------------------------------------------------- 옆 메뉴 (계정 전환)
+async function openDrawer() {
+  await loadAccounts();
+  const el = document.createElement('div');
+  el.className = 'drawer-backdrop';
+  const me = mySpace();
+  const others = accounts.filter((a) => a.id !== me);
+  const item = (a) => `
+    <a class="d-item ${a.id === currentSpace ? 'on' : ''}" href="${L(a.id)}">
+      <span class="avatar">${h(spaceName(a.id).slice(0, 1).toUpperCase())}</span>
+      <span class="d-name"><b>${h(spaceName(a.id))}</b><small>${a.id === me ? '내 브리핑' : canEdit(a.id) ? '편집 가능' : '보기 전용'}</small></span>
+      ${a.id === currentSpace ? icon.check : ''}
+    </a>`;
+  el.innerHTML = `
+  <aside class="drawer" role="dialog" aria-label="계정 메뉴">
+    <div class="d-head"><span class="avatar">${h(spaceName(me).slice(0, 1).toUpperCase())}</span><div><b>${h(spaceName(me))}</b><small>${isAdmin() ? '관리자' : '멤버'}로 로그인됨</small></div></div>
+    <p class="d-label">내 브리핑</p>
+    ${item(accounts.find((a) => a.id === me) || { id: me })}
+    ${others.length ? `<p class="d-label">다른 사람 스케줄${isAdmin() ? '' : ' · 보기 전용'}</p>${others.map(item).join('')}` : ''}
+    <div class="d-foot">
+      <a class="d-link" href="#/settings">${icon.gear}${isAdmin() ? '설정 · 사용자 관리' : '내 계정'}</a>
+      <button class="d-link danger" data-logout>${icon.trash}로그아웃</button>
+    </div>
+  </aside>`;
+  document.body.appendChild(el);
+  requestAnimationFrame(() => el.classList.add('show'));
+  const close = () => { el.classList.remove('show'); setTimeout(() => el.remove(), 250); };
+  el.addEventListener('click', (e) => {
+    if (e.target === el || e.target.closest('a')) close();
+    if (e.target.closest('[data-logout]')) { logout(); close(); toast('로그아웃했어요'); location.hash = '#/'; route(); }
+  });
+}
+document.addEventListener('click', (e) => { if (e.target.closest('[data-action="drawer"]')) openDrawer(); });
 
 // ---------------------------------------------------------------- 라우터
 async function route() {
   const parts = location.hash.replace(/^#\/?/, '').split('/').filter(Boolean).map(decodeURIComponent);
   window.scrollTo(0, 0);
   try {
-    if (parts[0] === 'settings') return renderSettings();
-    if (!isConfigured()) return renderLogin();
-    if (parts[0] === 'p' && parts[1]) return await renderProject(parts[1], parts[2]);
-    return await renderHome();
+    if (parts[0] === 'settings') { currentSpace = null; return renderSettings(); }
+    if (!isConfigured()) { currentSpace = null; return renderLogin(); }
+    await loadAccounts();
+    if (parts[0] === 'p' && parts[1]) { location.replace(L(mySpace(), parts[1], parts[2])); return; } // 예전 주소
+    if (parts[0] !== 's' || !parts[1]) { location.replace(L(mySpace())); return; }
+    currentSpace = parts[1];
+    if (parts[2] === 'p' && parts[3]) return await renderProject(currentSpace, parts[3], parts[4]);
+    return await renderHome(currentSpace);
   } catch (e) {
     console.error(e);
     if (e.status === 401) {
@@ -186,8 +263,10 @@ function renderLogin(message = '') {
     <p class="eyebrow">CALL SHEET BRIEFING</p>
     <h1>타임테이블,<br>이제 한눈에.</h1>
     <p class="lead">도착 시간, 촬영지 주소, 이동 동선, 담당자 연락처를 한 화면에. 새 버전이 나오면 무엇이 바뀌었는지 바로 보여드립니다.</p>
+    <div class="account-pick" id="accountPick" hidden></div>
     <form class="login card" id="loginForm">
-      <label>아이디<input name="id" autocomplete="username" autocapitalize="none" spellcheck="false" required></label>
+      <div class="login-who" id="loginWho" hidden></div>
+      <label id="idField">아이디<input name="id" autocomplete="username" autocapitalize="none" spellcheck="false" required></label>
       <label>비밀번호<input name="pw" type="password" autocomplete="current-password" required></label>
       <button class="btn large block" type="submit">로그인</button>
       <p class="login-msg" id="loginMsg">${h(message)}</p>
@@ -197,6 +276,34 @@ function renderLogin(message = '') {
 
   const form = $('#loginForm');
   $('input[name=id]', form).focus();
+
+  // 계정 선택 카드 (공개 목록이 있을 때)
+  fetchAccounts().then((list) => {
+    if (!list?.length) return;
+    const pickEl = $('#accountPick');
+    pickEl.hidden = false;
+    pickEl.innerHTML = `<p class="pick-title">계정을 선택하세요</p><div class="pick-grid">${list.map((a) => `
+      <button type="button" class="pick" data-id="${h(a.id)}">
+        <span class="avatar lg">${h(a.id.slice(0, 1).toUpperCase())}</span>
+        <strong>${h(a.id)}</strong>
+        <span>${a.role === 'admin' ? '관리자' : '멤버'}</span>
+      </button>`).join('')}</div>`;
+    form.hidden = true;
+    pickEl.addEventListener('click', (e) => {
+      const b = e.target.closest('.pick');
+      if (!b) return;
+      $$('.pick', pickEl).forEach((x) => x.classList.toggle('on', x === b));
+      form.hidden = false;
+      $('input[name=id]', form).value = b.dataset.id;
+      $('#idField').hidden = true;
+      $('#loginWho').hidden = false;
+      $('#loginWho').innerHTML = `<span class="avatar sm">${h(b.dataset.id.slice(0, 1).toUpperCase())}</span><b>${h(b.dataset.id)}</b> 계정으로 로그인`;
+      $('#loginMsg').textContent = '';
+      $('input[name=pw]', form).value = '';
+      $('input[name=pw]', form).focus();
+    });
+  });
+
   form.addEventListener('submit', async (e) => {
     e.preventDefault();
     const btn = $('button', form);
@@ -208,8 +315,7 @@ function renderLogin(message = '') {
       const data = await login(id, pw);
       saveSettings({ ...DEFAULTS, ...pick(data, SESSION_FIELDS), userId: normId(id) });
       toast(`${normId(id)}님, 환영합니다`);
-      location.hash = '#/';
-      route();
+      location.hash = L(mySpace());
     } catch (err) {
       $('#loginMsg').textContent = err.message;
       btn.disabled = false;
@@ -219,15 +325,15 @@ function renderLogin(message = '') {
 }
 
 // ---------------------------------------------------------------- 홈
-async function renderHome() {
+async function renderHome(space) {
   app.innerHTML = shell('<section class="section"><div class="skeleton tall"></div></section>', { active: 'home' });
-  const lib = await getLibrary();
+  const lib = await getLibrary(space);
   const today = new Date(); today.setHours(0, 0, 0, 0);
   const projects = [...lib.index.projects].sort((a, b) => (a.date || '9999').localeCompare(b.date || '9999'));
   const upcoming = projects.filter((p) => !p.date || new Date(p.date + 'T00:00:00') >= today);
   const past = projects.filter((p) => !upcoming.includes(p)).reverse();
   const [next, ...later] = upcoming;
-  const href = (p) => `#/p/${encodeURIComponent(p.id)}`;
+  const href = (p) => L(space, p.id);
 
   // --- 다가오는 촬영 (1건 크게)
   let featured = '';
@@ -261,7 +367,7 @@ async function renderHome() {
     <section class="hero">
       <p class="eyebrow">CALL SHEET BRIEFING</p>
       <h1>예정된 촬영이 없어요.</h1>
-      <p class="lead">${isAdmin() ? '타임테이블 PDF를 올리면<br>브리핑이 만들어집니다.' : '관리자가 타임테이블을 올리면<br>여기에 나타나요.'}</p>
+      <p class="lead">${canUpload(space) ? '타임테이블 PDF를 올리면<br>브리핑이 만들어집니다.' : `${h(spaceName(space))}님이 타임테이블을 올리면<br>여기에 나타나요.`}</p>
     </section>`;
   }
 
@@ -297,7 +403,7 @@ async function renderHome() {
   app.innerHTML = shell(`
     ${featured}
     ${later.length ? `<section class="section"><h2 class="section-title">${icon.clock} 예정된 촬영 <span class="count">${later.length}</span></h2>${byMonth(later)}</section>` : ''}
-    ${isAdmin() ? `<section class="section">
+    ${canUpload(space) ? `<section class="section">
       <div class="dropzone" data-action="upload" id="dropzone">
         ${icon.upload}
         <strong>타임테이블 PDF 올리기</strong>
@@ -325,11 +431,11 @@ async function renderHome() {
 }
 
 // ---------------------------------------------------------------- 프로젝트 브리핑
-async function renderProject(pid, vid) {
+async function renderProject(space, pid, vid) {
   app.innerHTML = shell('<section class="section"><div class="skeleton tall"></div><div class="skeleton"></div></section>');
-  const lib = await getLibrary();
+  const lib = await getLibrary(space);
   const project = lib.project(pid);
-  if (!project) { location.hash = '#/'; return; }
+  if (!project) { location.hash = L(space); return; }
   const versions = lib.sortedVersions(project);
   const latest = versions[versions.length - 1];
   const meta = versions.find((v) => v.id === vid) || latest;
@@ -347,12 +453,12 @@ async function renderProject(pid, vid) {
     <div class="hero-text">
       <p class="eyebrow">${h([prod.production_company, prod.shoot_type].filter(Boolean).join(' · ') || 'CALL SHEET')}</p>
       <h1>${h(prod.project_title || project.title)}</h1>
-      <p class="lead">${h(prettyDate(prod.shoot_date || project.date, prod.weekday))} <span class="dday">${h(dday(prod.shoot_date || project.date))}</span>${isAdmin() ? `<button type="button" class="mini-btn" id="prepBtn">${icon.clock}시간 작성</button>` : ''}</p>
+      <p class="lead">${h(prettyDate(prod.shoot_date || project.date, prod.weekday))} <span class="dday">${h(dday(prod.shoot_date || project.date))}</span>${canEdit(space) ? `<button type="button" class="mini-btn" id="prepBtn">${icon.clock}시간 작성</button>` : ''}</p>
       <div class="ver-line">
         <span class="pill ${isLatest ? 'latest' : 'old'}">${isLatest ? '최신' : '이전 버전'} · ${h(meta.label)}</span>
         ${rec.changes ? `<span class="pill ${rec.changes.changes.length ? 'warn' : ''}">${h(rec.changes.againstLabel)} 대비 변경 ${rec.changes.changes.length}건</span>` : '<span class="pill">첫 버전</span>'}
       </div>
-      ${!isLatest ? `<a class="old-banner" href="#/p/${encodeURIComponent(pid)}">${icon.alert} 지금 보고 있는 건 예전 버전이에요. 최신(${h(latest.label)}) 보기 ${icon.chevron}</a>` : ''}
+      ${!isLatest ? `<a class="old-banner" href="${L(space, pid)}">${icon.alert} 지금 보고 있는 건 예전 버전이에요. 최신(${h(latest.label)}) 보기 ${icon.chevron}</a>` : ''}
       ${a.headline ? `<div class="headline">${flow(a.headline)}</div>` : ''}
     </div>
     <div class="hero-visual"><img alt="타임테이블 미리보기" data-thumb="${h(pid)}/${h(meta.id)}"></div>
@@ -362,10 +468,10 @@ async function renderProject(pid, vid) {
   const switcher = `
   <div class="version-bar"><div class="version-scroll">
     ${[...versions].reverse().map((v) => `
-      <a class="vchip ${v.id === meta.id ? 'on' : ''}" href="#/p/${encodeURIComponent(pid)}/${v.id}">
+      <a class="vchip ${v.id === meta.id ? 'on' : ''}" href="${L(space, pid, v.id)}">
         ${h(v.label)}${v.id === latest.id ? '<i>최신</i>' : ''}${v.highChangeCount ? `<b>${v.highChangeCount}</b>` : ''}
       </a>`).join('')}
-    ${isAdmin() ? `<button class="vchip add" data-action="upload" data-project="${h(pid)}">${icon.upload} 새 버전</button>` : ''}
+    ${canUpload(space) ? `<button class="vchip add" data-action="upload" data-project="${h(pid)}">${icon.upload} 새 버전</button>` : ''}
   </div></div>`;
 
   // --- 변경사항
@@ -548,7 +654,7 @@ async function renderProject(pid, vid) {
     <ol class="history">
       ${[...versions].reverse().map((v) => `
       <li class="${v.id === meta.id ? 'on' : ''}">
-        <a href="#/p/${encodeURIComponent(pid)}/${v.id}">
+        <a href="${L(space, pid, v.id)}">
           <div class="h-thumb"><img alt="" data-thumb="${h(pid)}/${h(v.id)}"></div>
           <div class="h-body">
             <strong>${h(v.label)} ${v.id === latest.id ? '<i class="tag">최신</i>' : ''}${v.id === meta.id ? '<i class="tag gray">보는 중</i>' : ''}</strong>
@@ -556,7 +662,7 @@ async function renderProject(pid, vid) {
             <span class="h-chg">${v === versions[0] ? '첫 버전' : v.changeCount ? `변경 ${v.changeCount}건${v.highChangeCount ? ` (중요 ${v.highChangeCount})` : ''}` : '변경 없음'}</span>
           </div>
         </a>
-        ${isAdmin() ? `<button class="del" data-del="${v.id}" aria-label="이 버전 삭제">${icon.trash}</button>` : ''}
+        ${canEdit(space) ? `<button class="del" data-del="${v.id}" aria-label="이 버전 삭제">${icon.trash}</button>` : ''}
       </li>`).join('')}
     </ol>
   </section>`;
@@ -610,8 +716,8 @@ async function renderProject(pid, vid) {
     await lib.deleteVersion(pid, b.dataset.del);
     toast('버전을 삭제했어요');
     if (lib.project(pid)) {
-      if (b.dataset.del === meta.id) location.hash = `#/p/${encodeURIComponent(pid)}`; else route();
-    } else location.hash = '#/';
+      if (b.dataset.del === meta.id) location.hash = L(space, pid); else route();
+    } else location.hash = L(space);
   }));
 }
 
@@ -668,16 +774,18 @@ function openPrepModal(lib, project, callTime) {
 function logout() {
   try { localStorage.removeItem(SETTINGS_KEY); } catch {}
   settings = loadSettings();
-  library = null;
+  libraries.clear();
+  accounts = null;
+  currentSpace = null;
 }
 
 function renderAccount() {
   app.innerHTML = shell(`
-  <section class="hero small"><p class="eyebrow">ACCOUNT</p><h1>내 계정</h1><p class="lead">${h(settings.userId)} · 보기 전용</p></section>
+  <section class="hero small"><p class="eyebrow">ACCOUNT</p><h1>내 계정</h1><p class="lead">${h(settings.userId)} · 멤버</p></section>
   <section class="section narrow">
     <div class="card">
       <div class="card-head">${icon.users}<h2>${h(settings.userId)}</h2></div>
-      <p class="muted small">타임테이블 브리핑을 볼 수 있는 계정이에요. 업로드와 삭제는 관리자만 할 수 있어요.</p>
+      <p class="muted small">내 브리핑에는 타임테이블 올리기·시간 작성·삭제를 할 수 있고, 다른 사람의 스케줄은 왼쪽 메뉴에서 보기 전용으로 볼 수 있어요.</p>
       <button type="button" class="btn ghost danger" id="logout">로그아웃</button>
     </div>
   </section>`, { active: 'settings' });
@@ -686,8 +794,8 @@ function renderAccount() {
 
 const DEFAULT_USERS = [
   { id: 'jj', role: 'admin' },
-  { id: 'hk', role: 'viewer' },
-  { id: 'sh', role: 'viewer' },
+  { id: 'hk', role: 'member' },
+  { id: 'sh', role: 'member' },
 ];
 
 function renderSettings() {
@@ -725,10 +833,11 @@ function renderSettings() {
       </div>
 
       <div class="card">
-        <div class="card-head">${icon.users}<h2>보기 전용 토큰</h2></div>
-        <p class="muted small">보기 전용 계정에 들어갈 토큰이에요. 새 Fine-grained token을 하나 더 만들어
-          <b>shoot-briefing-data</b>만 선택 → Permissions: <b>Contents: Read-only</b>로 설정하세요. 이 토큰으로는 GitHub이 쓰기·삭제를 막아요.</p>
-        <label>보기 전용 토큰 (읽기만)<input type="password" name="viewerToken" value="${h(s.viewerToken)}" placeholder="github_pat_..."></label>
+        <div class="card-head">${icon.users}<h2>멤버 토큰</h2></div>
+        <p class="muted small">멤버 계정(hk, sh)에 들어갈 토큰이에요. Fine-grained token을 하나 더 만들어
+          <b>shoot-briefing-data</b>만 선택 → Permissions: <b>Contents: Read and write</b>로 설정하세요.
+          (예전에 만든 읽기 전용 토큰이 있다면 GitHub에서 그 토큰의 권한을 Read and write로 바꿔도 돼요.)</p>
+        <label>멤버 토큰 (데이터 저장소 읽기+쓰기)<input type="password" name="memberToken" value="${h(s.memberToken)}" placeholder="github_pat_..."></label>
       </div>
 
       <button class="btn large block" type="submit">저장</button>
@@ -736,7 +845,8 @@ function renderSettings() {
 
     <div class="card users-card form" id="usersCard">
       <div class="card-head">${icon.users}<h2>사용자 관리</h2></div>
-      ${repo ? `<p class="muted small">아이디와 비밀번호로 로그인할 계정이에요. <b>관리자</b>는 올리기·삭제·설정까지, <b>보기 전용</b>은 브리핑 보기만 할 수 있어요.
+      ${repo ? `<p class="muted small">아이디와 비밀번호로 로그인할 계정이에요. <b>관리자</b>는 모든 사람의 브리핑을 읽고 쓸 수 있고, <b>멤버</b>는 자기 브리핑만 쓰고 다른 사람 것은 볼 수만 있어요.
+        멤버 계정에도 위 Claude 키가 들어가서, 멤버가 올린 분석 비용도 같은 키로 청구돼요.
         비밀번호는 어디에도 그대로 저장되지 않아요. 비밀번호를 바꾸거나 위 설정(키·토큰)을 바꿨다면 해당 계정을 다시 저장하세요.</p>
       <div id="userRows"><p class="muted small">불러오는 중…</p></div>
       <button type="button" class="btn ghost" id="addUser">+ 사용자 추가</button>` : '<p class="muted small">GitHub Pages 주소에서 열었을 때만 쓸 수 있어요.</p>'}
@@ -801,7 +911,7 @@ function renderSettings() {
         <div class="user-top">
           <input class="u-id" value="${h(u.id)}" placeholder="아이디" ${u.saved ? 'readonly' : ''} autocapitalize="none" spellcheck="false">
           <select class="u-role">
-            <option value="viewer" ${u.role !== 'admin' ? 'selected' : ''}>보기 전용</option>
+            <option value="member" ${u.role !== 'admin' ? 'selected' : ''}>멤버</option>
             <option value="admin" ${u.role === 'admin' ? 'selected' : ''}>관리자</option>
           </select>
         </div>
@@ -814,18 +924,24 @@ function renderSettings() {
       </div>`).join('');
   };
 
-  const saveIndex = () => dataStore().putText(usersPath, JSON.stringify({ users: users.filter((u) => u.saved).map(({ id, role, updatedAt }) => ({ id, role, updatedAt })) }, null, 2), '사용자 목록 갱신');
+  const saveIndex = async () => {
+    const list = users.filter((u) => u.saved).map(({ id, role, updatedAt }) => ({ id, role, updatedAt }));
+    await dataStore().putText(usersPath, JSON.stringify({ users: list }, null, 2), '사용자 목록 갱신');
+    // 로그인 화면의 계정 선택 카드용 공개 목록 (아이디·권한만)
+    await publishAccounts(new GitHubStore({ token: settings.ghToken, owner: repo.owner, repo: repo.repo }), list.map(({ id, role }) => ({ id, role })));
+    accounts = null;
+  };
 
   (async () => {
     if (!storageReady()) { users = DEFAULT_USERS.map((u) => ({ ...u })); renderRows(); return; }
     try {
       const text = await dataStore().getText(usersPath);
-      users = text ? JSON.parse(text).users.map((u) => ({ ...u, saved: true })) : DEFAULT_USERS.map((u) => ({ ...u }));
+      users = text ? JSON.parse(text).users.map((u) => ({ ...u, role: u.role === 'viewer' ? 'member' : u.role, saved: true })) : DEFAULT_USERS.map((u) => ({ ...u }));
     } catch { users = DEFAULT_USERS.map((u) => ({ ...u })); }
     renderRows();
   })();
 
-  $('#addUser').addEventListener('click', () => { users.push({ id: '', role: 'viewer' }); renderRows(); });
+  $('#addUser').addEventListener('click', () => { users.push({ id: '', role: 'member' }); renderRows(); });
 
   rowsEl.addEventListener('click', async (e) => {
     const row = e.target.closest('.user-row');
@@ -865,15 +981,15 @@ function renderSettings() {
     btn.textContent = '저장 중…';
     try {
       const v = await validateAndSave();
-      if (role === 'viewer' && !v.viewerToken) throw new Error('보기 전용 토큰을 먼저 입력하세요');
-      if (role === 'viewer') {
-        const test = new GitHubStore({ token: v.viewerToken, owner: v.ghOwner, repo: v.ghRepo });
-        await test.getText('index.json').catch(() => { throw new Error('보기 전용 토큰으로 데이터 저장소를 읽을 수 없어요. 토큰을 확인하세요.'); });
+      if (role === 'member' && !v.memberToken) throw new Error('멤버 토큰을 먼저 입력하세요');
+      if (role === 'member') {
+        const test = new GitHubStore({ token: v.memberToken, owner: v.ghOwner, repo: v.ghRepo });
+        await test.check().catch((err) => { throw new Error(`멤버 토큰 확인 실패: ${err.message}`); });
       }
       const base = { mode: 'github', ghOwner: v.ghOwner, ghRepo: v.ghRepo, kakaoKey: v.kakaoKey };
       const data = role === 'admin'
-        ? { ...base, role, ghToken: v.ghToken, anthropicKey: v.anthropicKey, viewerToken: v.viewerToken }
-        : { ...base, role, ghToken: v.viewerToken };
+        ? { ...base, role, ghToken: v.ghToken, anthropicKey: v.anthropicKey, memberToken: v.memberToken }
+        : { ...base, role, ghToken: v.memberToken, anthropicKey: v.anthropicKey };
       await publishUser(appStore(), id, pw, data);
       Object.assign(u, { id, role, saved: true, updatedAt: new Date().toISOString() });
       await saveIndex();
@@ -897,13 +1013,13 @@ let pickerProject = null;
 picker.addEventListener('change', () => {
   const files = [...picker.files];
   picker.value = '';
-  if (files.length) uploadFiles(files, pickerProject);
+  if (files.length) uploadFiles(files, pickerProject, currentSpace);
 });
 
 document.addEventListener('click', (e) => {
   const t = e.target.closest('[data-action="upload"]');
   if (!t) return;
-  if (!isConfigured() || !isAdmin()) return;
+  if (!isConfigured() || !currentSpace || !canUpload(currentSpace)) return;
   pickerProject = t.dataset.project || null;
   picker.click();
 });
@@ -915,7 +1031,7 @@ function bindDrop(el) {
   el.addEventListener('drop', (e) => {
     e.preventDefault();
     const files = [...e.dataTransfer.files].filter((f) => /pdf$/i.test(f.type) || /\.pdf$/i.test(f.name));
-    if (files.length) uploadFiles(files, null);
+    if (files.length) uploadFiles(files, null, currentSpace);
   });
 }
 
@@ -957,10 +1073,10 @@ function progressSheet() {
   };
 }
 
-async function uploadFiles(files, projectId) {
+async function uploadFiles(files, projectId, space) {
   const sheet = progressSheet();
   let lastProject = null;
-  const lib = await getLibrary().catch((e) => { sheet.title('저장소 연결 실패'); sheet.detail(e.message); return null; });
+  const lib = await getLibrary(space).catch((e) => { sheet.title('저장소 연결 실패'); sheet.detail(e.message); return null; });
   if (!lib) { sheet.actions('<button class="btn" data-close>닫기</button>').querySelector('[data-close]').onclick = sheet.close; return; }
 
   // 버전 순서대로 처리해야 변경사항 비교가 자연스럽다
@@ -1008,7 +1124,7 @@ async function uploadFiles(files, projectId) {
       sheet.detail(`${file.name}: ${msg}`);
       const el = sheet.actions(`<button class="btn ghost" data-close>닫기</button>${lastProject ? '<button class="btn" data-go>지금까지 결과 보기</button>' : ''}`);
       el.querySelector('[data-close]').onclick = () => { sheet.close(); route(); };
-      el.querySelector('[data-go]')?.addEventListener('click', () => { sheet.close(); location.hash = `#/p/${encodeURIComponent(lastProject.id)}`; });
+      el.querySelector('[data-go]')?.addEventListener('click', () => { sheet.close(); location.hash = L(space, lastProject.id); });
       return;
     }
   }
@@ -1017,7 +1133,7 @@ async function uploadFiles(files, projectId) {
   sheet.detail('');
   setTimeout(() => {
     sheet.close();
-    const target = `#/p/${encodeURIComponent(lastProject.id)}`;
+    const target = L(space, lastProject.id);
     if (location.hash === target) route(); else location.hash = target;
   }, 700);
 }
