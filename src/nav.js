@@ -1,5 +1,6 @@
 // 네이버지도 / 카카오 길안내 연결
-const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
+// iPadOS 13+ 사파리는 UA가 Macintosh라 터치 지원 여부로 구분
+const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent) || (/Macintosh/.test(navigator.userAgent) && navigator.maxTouchPoints > 1);
 const APP_NAME = location.hostname || 'shoot-briefing';
 
 function openWithFallback(scheme, web) {
@@ -62,17 +63,25 @@ async function geocode(key, address) {
   return hit ? { x: hit.x, y: hit.y } : null;
 }
 
-export async function openKakao(loc, kakaoKey) {
-  if (!kakaoKey || !isMobile) return openKakaoMap(loc);
+// 내비를 못 띄우고 카카오맵으로 대신 열 때는 onFallback(이유)로 알려준다
+export async function openKakao(loc, kakaoKey, onFallback = () => {}) {
+  const fallback = (reason) => {
+    onFallback(reason);
+    setTimeout(() => openKakaoMap(loc), 1200);
+  };
+  if (!kakaoKey) return openKakaoMap(loc);
+  if (!isMobile) return fallback('카카오내비는 휴대폰에서만 실행돼요. 카카오맵으로 열게요');
   try {
     await loadScript('https://t1.kakaocdn.net/kakao_js_sdk/2.7.4/kakao.min.js');
     if (!window.Kakao.isInitialized()) window.Kakao.init(kakaoKey);
-    const pt = await geocode(kakaoKey, loc.address || loc.name);
-    if (!pt) return openKakaoMap(loc);
+    // SDK가 응답 없이 멈추는 경우(도메인 미등록 등) 대비
+    const timeout = new Promise((_, rej) => setTimeout(() => rej(new Error('응답 없음')), 8000));
+    const pt = await Promise.race([geocode(kakaoKey, loc.address || loc.name), timeout]);
+    if (!pt) return fallback('주소를 좌표로 바꾸지 못했어요. 카카오맵으로 열게요');
     window.Kakao.Navigation.start({ name: loc.name || loc.address, x: Number(pt.x), y: Number(pt.y), coordType: 'wgs84' });
   } catch (e) {
     console.warn(e);
-    openKakaoMap(loc);
+    fallback(`카카오 연결 실패(${e.message || e}). 키·도메인 등록·카카오맵 사용 설정을 확인하세요`);
   }
 }
 

@@ -676,7 +676,7 @@ async function renderProject(space, pid, vid) {
   $$('[data-nav]').forEach((b) => b.addEventListener('click', () => {
     const loc = navTargets[Number(b.dataset.loc)] || {};
     if (!loc.address && !loc.name) return toast('주소 정보가 없어요');
-    b.dataset.nav === 'naver' ? openNaver(loc) : openKakao(loc, settings.kakaoKey);
+    b.dataset.nav === 'naver' ? openNaver(loc) : openKakao(loc, settings.kakaoKey, toast);
   }));
   $$('[data-copy]').forEach((b) => b.addEventListener('click', async () => toast((await copyText(b.dataset.copy)) ? '주소를 복사했어요' : '복사하지 못했어요')));
   $$('#trackSeg button').forEach((b) => b.addEventListener('click', () => {
