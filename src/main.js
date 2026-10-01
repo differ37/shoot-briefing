@@ -1,5 +1,6 @@
 import './styles.css';
 import { icon } from './icons.js';
+import { avatarHtml, displayName } from './profiles.js';
 import { GitHubStore, LocalStore, PrefixedStore } from './storage.js';
 import { Library, versionKeyFromName } from './library.js';
 import { analyzeTimetable, compareVersions, testKey } from './claude.js';
@@ -53,7 +54,7 @@ async function loadAccounts() {
 }
 const roleOf = (space) => (space === ADMIN_SPACE ? 'admin' : accounts?.find((a) => a.id === space)?.role);
 const spacePrefix = (space) => (roleOf(space) === 'admin' ? '' : `spaces/${space}/`);
-const spaceName = (space) => (space === ADMIN_SPACE ? '관리자' : space);
+const spaceName = (space) => (space === ADMIN_SPACE ? '관리자' : displayName(space));
 // 쓰기: 관리자는 모든 공간, 나머지는 자기 공간만 (예전 보기 전용 계정은 쓰기 불가)
 const canEdit = (space) => settings.role !== 'viewer' && (isAdmin() || space === mySpace());
 const canUpload = (space) => canEdit(space) && !!settings.anthropicKey;
@@ -181,13 +182,13 @@ function shell(content, { active = '' } = {}) {
       <a class="brand" href="#/">${icon.truck}<span>촬영 브리핑</span></a>
       <nav class="nav-links">
         ${isConfigured() && currentSpace && canUpload(currentSpace) ? `<button class="nav-upload" data-action="upload">${icon.upload}<span>타임테이블 올리기</span></button>` : ''}
-        ${isConfigured() ? `<button class="user-chip" data-action="drawer" aria-label="계정 메뉴"><span class="avatar sm">${h(spaceName(mySpace()).slice(0, 1).toUpperCase())}</span><span class="uname">${h(spaceName(mySpace()))}</span></button>` : ''}
+        ${isConfigured() ? `<button class="user-chip" data-action="drawer" aria-label="계정 메뉴">${avatarHtml(mySpace(), 'sm')}<span class="uname">${h(spaceName(mySpace()))}</span></button>` : ''}
       </nav>
     </div>
   </header>
   ${isConfigured() && currentSpace && currentSpace !== mySpace() && active !== 'settings' ? `
   <div class="space-banner"><div>
-    <span class="avatar sm">${h(spaceName(currentSpace).slice(0, 1).toUpperCase())}</span>
+    ${avatarHtml(currentSpace, 'sm')}
     <span><b>${h(spaceName(currentSpace))}</b>님의 스케줄 · ${canEdit(currentSpace) ? '편집 가능' : '보기 전용'}</span>
     <a href="${L(mySpace())}">내 브리핑으로 ${icon.chevron}</a>
   </div></div>` : ''}
@@ -204,13 +205,13 @@ async function openDrawer() {
   const others = accounts.filter((a) => a.id !== me);
   const item = (a) => `
     <a class="d-item ${a.id === currentSpace ? 'on' : ''}" href="${L(a.id)}">
-      <span class="avatar">${h(spaceName(a.id).slice(0, 1).toUpperCase())}</span>
+      ${avatarHtml(a.id)}
       <span class="d-name"><b>${h(spaceName(a.id))}</b><small>${a.id === me ? '내 브리핑' : canEdit(a.id) ? '편집 가능' : '보기 전용'}</small></span>
       ${a.id === currentSpace ? icon.check : ''}
     </a>`;
   el.innerHTML = `
   <aside class="drawer" role="dialog" aria-label="계정 메뉴">
-    <div class="d-head"><span class="avatar">${h(spaceName(me).slice(0, 1).toUpperCase())}</span><div><b>${h(spaceName(me))}</b><small>${isAdmin() ? '관리자' : '멤버'}로 로그인됨</small></div></div>
+    <div class="d-head">${avatarHtml(me, 'md')}<div><b>${h(spaceName(me))}</b><small>${isAdmin() ? '관리자' : '멤버'}로 로그인됨</small></div></div>
     <p class="d-label">내 브리핑</p>
     ${item(accounts.find((a) => a.id === me) || { id: me })}
     ${others.length ? `<p class="d-label">다른 사람 스케줄${isAdmin() ? '' : ' · 보기 전용'}</p>${others.map(item).join('')}` : ''}
@@ -284,8 +285,8 @@ function renderLogin(message = '') {
     pickEl.hidden = false;
     pickEl.innerHTML = `<p class="pick-title">계정을 선택하세요</p><div class="pick-grid">${list.map((a) => `
       <button type="button" class="pick" data-id="${h(a.id)}">
-        <span class="avatar lg">${h(a.id.slice(0, 1).toUpperCase())}</span>
-        <strong>${h(a.id)}</strong>
+        ${avatarHtml(a.id, 'lg')}
+        <strong>${h(displayName(a.id))}</strong>
         <span>${a.role === 'admin' ? '관리자' : '멤버'}</span>
       </button>`).join('')}</div>`;
     form.hidden = true;
@@ -297,7 +298,7 @@ function renderLogin(message = '') {
       $('input[name=id]', form).value = b.dataset.id;
       $('#idField').hidden = true;
       $('#loginWho').hidden = false;
-      $('#loginWho').innerHTML = `<span class="avatar sm">${h(b.dataset.id.slice(0, 1).toUpperCase())}</span><b>${h(b.dataset.id)}</b> 계정으로 로그인`;
+      $('#loginWho').innerHTML = `${avatarHtml(b.dataset.id, 'md')}<span><b>${h(displayName(b.dataset.id))}</b> 계정으로 로그인</span>`;
       $('#loginMsg').textContent = '';
       $('input[name=pw]', form).value = '';
       $('input[name=pw]', form).focus();
@@ -314,7 +315,7 @@ function renderLogin(message = '') {
     try {
       const data = await login(id, pw);
       saveSettings({ ...DEFAULTS, ...pick(data, SESSION_FIELDS), userId: normId(id) });
-      toast(`${normId(id)}님, 환영합니다`);
+      toast(`${displayName(normId(id))}님, 환영합니다`);
       location.hash = L(mySpace());
     } catch (err) {
       $('#loginMsg').textContent = err.message;
@@ -781,10 +782,10 @@ function logout() {
 
 function renderAccount() {
   app.innerHTML = shell(`
-  <section class="hero small"><p class="eyebrow">ACCOUNT</p><h1>내 계정</h1><p class="lead">${h(settings.userId)} · 멤버</p></section>
+  <section class="hero small"><p class="eyebrow">ACCOUNT</p><h1>내 계정</h1><p class="lead">${h(displayName(settings.userId))} · 멤버</p></section>
   <section class="section narrow">
     <div class="card">
-      <div class="card-head">${icon.users}<h2>${h(settings.userId)}</h2></div>
+      <div class="card-head">${avatarHtml(settings.userId, 'md')}<h2>${h(displayName(settings.userId))} <span class="opt">${h(settings.userId)}</span></h2></div>
       <p class="muted small">내 브리핑에는 타임테이블 올리기·시간 작성·삭제를 할 수 있고, 다른 사람의 스케줄은 왼쪽 메뉴에서 보기 전용으로 볼 수 있어요.</p>
       <button type="button" class="btn ghost danger" id="logout">로그아웃</button>
     </div>
@@ -909,7 +910,7 @@ function renderSettings() {
     rowsEl.innerHTML = users.map((u, i) => `
       <div class="user-row" data-i="${i}">
         <div class="user-top">
-          <input class="u-id" value="${h(u.id)}" placeholder="아이디" ${u.saved ? 'readonly' : ''} autocapitalize="none" spellcheck="false">
+          ${avatarHtml(u.id, 'md')}<input class="u-id" value="${h(u.id)}" placeholder="아이디" ${u.saved ? 'readonly' : ''} autocapitalize="none" spellcheck="false">
           <select class="u-role">
             <option value="member" ${u.role !== 'admin' ? 'selected' : ''}>멤버</option>
             <option value="admin" ${u.role === 'admin' ? 'selected' : ''}>관리자</option>
