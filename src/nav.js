@@ -78,7 +78,7 @@ export async function openKakao(loc, kakaoKey, onFallback = () => {}) {
     const timeout = new Promise((_, rej) => setTimeout(() => rej(new Error('응답 없음')), 8000));
     const pt = await Promise.race([geocode(kakaoKey, loc.address || loc.name), timeout]);
     if (!pt) return fallback('주소를 좌표로 바꾸지 못했어요. 카카오맵으로 열게요');
-    window.Kakao.Navi.start({ name: loc.name || loc.address, x: Number(pt.x), y: Number(pt.y), coordType: 'wgs84' });
+    window.Kakao.Navi.start({ name: loc.name || loc.address, x: Number(pt.x), y: Number(pt.y), coordType: 'wgs84', routeInfo: true });
   } catch (e) {
     console.warn(e);
     fallback(`카카오 연결 실패(${e.message || e}). 키·도메인 등록·카카오맵 사용 설정을 확인하세요`);
