@@ -3,6 +3,10 @@
     {
       "id": "jj",
       "role": "admin"
+    },
+    {
+      "id": "hk",
+      "role": "member"
     }
   ]
 }
