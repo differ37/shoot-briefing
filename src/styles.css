@@ -723,3 +723,42 @@ button.user-chip { border: 0; cursor: pointer; font: inherit; font-size: 14px; }
 .q-final-actions { display: grid; gap: 10px; margin-top: 8px; }
 .q-final-actions .row-gap .spacer { flex: 1; }
 .tl-body { min-width: 0; }
+
+/* ---------- 모바일 줄바꿈 ---------- */
+.ch { display: inline-block; max-width: 100%; }
+h1, h2, h3, .f-title, .tl-title strong, .stop-head strong, .chg-top strong { text-wrap: balance; }
+p, li, .stop-role, .tl-loc, .sr-sub { text-wrap: pretty; }
+@media (max-width: 520px) {
+  .hero h1 { font-size: 32px; }
+  .hero.project-hero h1 { font-size: 30px; }
+  .eyebrow { font-size: 12px; }
+  .f-title { font-size: 24px; }
+  .briefing p, .briefing .lines p { font-size: 15px; line-height: 1.6; }
+  .flow li { font-size: 15px; }
+  .call-where strong { font-size: 20px; }
+  .call-where > span { font-size: 15px; }
+  .stop-body { padding: 16px; }
+  .stop-head strong { font-size: 18px; }
+  .stop-role { font-size: 13px; }
+  .stop-addr { font-size: 15px; }
+  .move > div { font-size: 13px; }
+  .tl { grid-template-columns: 58px 1fr; gap: 12px; padding: 14px 16px; }
+  .tl-time strong { font-size: 16px; }
+  .tl-title strong { font-size: 15px; }
+  .tl-body p, .tl-details p { font-size: 13.5px; }
+  .nav-btns { flex-wrap: nowrap; }
+  .nav-btns .btn.nav { flex: 1 1 auto; justify-content: center; padding: 10px 12px; white-space: nowrap; }
+  .nav-btns .btn.copy { flex: 0 0 auto; }
+}
+.stop, .move { grid-template-columns: 40px minmax(0, 1fr); }
+.stop-time { display: inline-flex; align-items: center; gap: 4px; font-size: 13px; font-weight: 700; color: var(--accent); margin-top: 4px; }
+.stop-time svg { width: 14px; height: 14px; }
+.move > div .mv-route { color: var(--text); font-weight: 600; }
+.move > div .mv-route i { font-style: normal; color: var(--warn); }
+.move > div .mv-who, .move > div .mv-note { font-size: 13px; }
+@media (max-width: 520px) {
+  .stop, .move { grid-template-columns: 30px minmax(0, 1fr); gap: 10px; }
+  .stop-dot { width: 30px; height: 30px; font-size: 14px; }
+  .nav-btns .btn.nav { font-size: 14px; padding: 10px; gap: 6px; }
+}
+.nb { white-space: nowrap; }

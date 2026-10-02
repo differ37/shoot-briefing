@@ -5,6 +5,7 @@ import { GitHubStore, LocalStore, PrefixedStore } from './storage.js';
 import { Library, versionKeyFromName } from './library.js';
 import { analyzeTimetable, compareVersions, testKey } from './claude.js';
 import { openPdf, pdfToAnalysisImages, pdfThumbnail, renderPagesInto } from './pdf.js';
+import { installTypeset } from './typeset.js';
 import { extractConti, matchSchedule, renderRegion, thumbRenderer } from './conti.js';
 import { computeMarks } from './diff.js';
 import { openNaver, openKakao, copyText } from './nav.js';
@@ -418,7 +419,7 @@ async function renderHome(space) {
     ${featured}
     ${later.length ? `<section class="section"><h2 class="section-title">${icon.clock} 예정된 촬영 <span class="count">${later.length}</span></h2>${byMonth(later)}</section>` : ''}
     ${space === mySpace() && canEdit(space) && projects.length ? `<section class="section">
-      <button class="quote-cta" data-action="quote">${icon.doc}<span><b>견적서 다운로드</b><small>끝낸 일정을 골라 금액만 넣으면 엑셀 견적서가 만들어져요</small></span>${icon.chevron}</button>
+      <button class="quote-cta" data-action="quote">${icon.doc}<span><b>견적서 다운로드</b><small>일정을 고르고 금액만 넣으면 돼요</small></span>${icon.chevron}</button>
     </section>` : ''}
     ${canUpload(space) ? `<section class="section">
       <div class="dropzone" data-action="upload" id="dropzone">
@@ -594,6 +595,11 @@ async function renderProject(space, pid, vid) {
     const i = moves.findIndex((m, k) => !used.has(k) && n(m.from) && n(loc.name) && (n(m.from).includes(n(loc.name)) || n(loc.name).includes(n(m.from))));
     return i;
   };
+  // 이동: "출발 → 도착" / 누가 / 메모 를 줄로 나눠 보여준다
+  const moveBody = (m, withNote = false) => `
+    <span class="mv-route">${h(m.from)} <i>→</i> ${h(m.to)}</span>
+    ${m.who ? `<span class="mv-who">${h(m.who)}</span>` : ''}
+    ${withNote && m.note ? `<span class="mv-note">${h(m.note)}</span>` : ''}`;
   let routeItems = '';
   locs.forEach((l, i) => {
     routeItems += `
@@ -601,7 +607,8 @@ async function renderProject(space, pid, vid) {
       <span class="stop-dot">${i + 1}</span>
       <div class="stop-body">
         <div class="stop-head"><strong>${h(l.name)}</strong>${badge(marks.locations.get(i))}</div>
-        <span class="stop-role">${h([l.role, l.time_range].filter(Boolean).join(' · '))}</span>
+        ${l.time_range ? `<span class="stop-time">${icon.clock}${h(l.time_range)}</span>` : ''}
+        ${l.role ? `<span class="stop-role">${h(l.role)}</span>` : ''}
         <p class="stop-addr">${icon.pin}${h(l.address || '주소 없음')}</p>
         ${l.note ? para(l.note, 'stop-note') : ''}
         ${navBtns(l, i + 1)}
@@ -612,12 +619,12 @@ async function renderProject(space, pid, vid) {
     if (mi >= 0) {
       used.add(mi);
       const m = moves[mi];
-      routeItems += `<li class="move"><span class="move-line"></span><div>${icon.truck}<strong>${h(m.time)}</strong> 이동 ${badge(marks.moves.get(mi))}<span>${h(m.from)} → ${h(m.to)}${m.who ? ` · ${h(m.who)}` : ''}${m.note ? ` · ${h(m.note)}` : ''}</span></div></li>`;
+      routeItems += `<li class="move"><span class="move-line"></span><div>${icon.truck}<strong>${h(m.time)}</strong> 이동 ${badge(marks.moves.get(mi))}${moveBody(m, true)}</div></li>`;
     }
   });
   moves.forEach((m, mi) => {
     if (used.has(mi)) return;
-    routeItems += `<li class="move"><span class="move-line"></span><div>${icon.truck}<strong>${h(m.time)}</strong> 이동 ${badge(marks.moves.get(mi))}<span>${h(m.from)} → ${h(m.to)}${m.who ? ` · ${h(m.who)}` : ''}</span></div></li>`;
+    routeItems += `<li class="move"><span class="move-line"></span><div>${icon.truck}<strong>${h(m.time)}</strong> 이동 ${badge(marks.moves.get(mi))}${moveBody(m)}</div></li>`;
   });
   const routeHtml = `
   <section class="section">
@@ -1530,4 +1537,5 @@ async function uploadFiles(files, projectId, space) {
   }, 700);
 }
 
+installTypeset();
 route();
