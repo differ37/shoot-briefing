@@ -33,6 +33,10 @@ npm run build
 - `src/quote.js` — 견적서 엑셀 생성. `public/quote-template.xlsx`(실제 견적서에서 개인정보·촬영 내용을 비운 틀)의 시트 XML에 값만 채움(fflate).
   DAY 줄은 15~27행(7일 이하면 한 줄씩 띄움), H12 수식은 `=G28`. 개인정보(이름·원천·전화·계좌)는 비밀번호로 암호화해 각자 공간의 `quote-profile.json`에 저장,
   로그인 때 풀어서 localStorage 설정(`quoteProfile`)에 둔다. **틀이나 코드에 개인정보를 절대 넣지 말 것.**
+  원천자료(신분증·통장 사본 이미지)도 같은 방식으로 `quote-source.json`에 암호화 저장, 로그인 때 localStorage `shoot-briefing.source`로(로그아웃 시 삭제).
+  "최종 문구 생성" = PD에게 보낼 메시지 + 견적서·원천자료 파일 공유(Web Share API, 안 되면 복사·다운로드).
+- `src/conti.js` — 진행표 줄마다 원본 PDF의 콘티 그림 찾기. 텍스트 레이어의 시간 글자("10:00")로 시작 시간 열을 찾고, 그 열을 가로지르는 표 선·면으로 칸 경계를 잡아
+  그림을 칸에 배정 → schedule.start와 순서대로 매칭. 썸네일은 페이지를 한 번 렌더링(≤12MP)해 잘라내고, 크게 보기는 그 영역만 고해상도 렌더링.
 - `src/profiles.js` — 표시 이름·얼굴 아이콘(jj=준연/정/아이언맨풍, hk=효권/서/슈퍼맨풍, sh=신훈/강/배트맨풍, 자체 SVG)
 
 ## 계정·권한

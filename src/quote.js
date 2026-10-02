@@ -31,6 +31,40 @@ export async function saveProfile(store, userId, pw, profile) {
   await store.putText(PROFILE_PATH, JSON.stringify(file) + '\n', '견적서 개인정보 갱신(암호화)');
 }
 
+// 원천자료(신분증·통장 사본 이미지)도 같은 방식으로 암호화해 둔다: { type, data(base64) }
+const SOURCE_PATH = 'quote-source.json';
+export async function loadSource(store, userId, pw) {
+  const text = await store.getText(SOURCE_PATH);
+  return text ? decryptUser(userId, pw, JSON.parse(text)) : null;
+}
+export async function hasSavedSource(store) {
+  return !!(await store.getText(SOURCE_PATH));
+}
+export async function saveSource(store, userId, pw, source) {
+  const file = await encryptUser(userId, pw, source);
+  await store.putText(SOURCE_PATH, JSON.stringify(file) + '\n', '견적서 원천자료 갱신(암호화)');
+}
+
+/** 고른 이미지 파일 → 긴 변 2000px JPEG (신분증 글씨가 읽히는 정도) */
+export async function prepareSourceImage(file) {
+  const bmp = await createImageBitmap(file);
+  const s = Math.min(1, 2000 / Math.max(bmp.width, bmp.height));
+  const c = document.createElement('canvas');
+  c.width = Math.round(bmp.width * s);
+  c.height = Math.round(bmp.height * s);
+  const ctx = c.getContext('2d');
+  ctx.fillStyle = '#fff';
+  ctx.fillRect(0, 0, c.width, c.height);
+  ctx.drawImage(bmp, 0, 0, c.width, c.height);
+  return { type: 'image/jpeg', data: c.toDataURL('image/jpeg', 0.9).split(',')[1] };
+}
+
+export const sourceDataUrl = (src) => (src ? `data:${src.type};base64,${src.data}` : '');
+export function sourceFile(src, name) {
+  const bin = Uint8Array.from(atob(src.data), (c) => c.charCodeAt(0));
+  return new File([bin], `${name || ''} 원천자료.jpg`.trim(), { type: src.type });
+}
+
 // ---------------------------------------------------------------- 기본값
 /** "경기도 용인시 처인구 …" → "용인", "서울특별시 성동구 …" → "서울" */
 export function cityOf(address) {
@@ -81,6 +115,23 @@ export function quoteFileName(dates, title, name) {
   const when = ds.length ? (ds.length > 1 ? `${k(ds[0])}~${k(ds[ds.length - 1])}` : k(ds[0])) : '';
   const raw = [when, title, '촬영 건 카메라팀 장비차량기사', name, '견적서'].filter(Boolean).join(' ');
   return raw.replace(/[\\/:*?"<>|]+/g, ' ').replace(/\s+/g, ' ').trim() + '.xlsx';
+}
+
+/** "9/14", "9/22~24", "9/30~10/1" */
+export function shortRange(dates) {
+  const ds = [...dates].sort();
+  if (!ds.length) return '';
+  const [, m1, d1] = ds[0].split('-').map(Number);
+  if (ds.length === 1) return `${m1}/${d1}`;
+  const [, m2, d2] = ds[ds.length - 1].split('-').map(Number);
+  return `${m1}/${d1}~${m1 === m2 ? d2 : `${m2}/${d2}`}`;
+}
+
+/** PD에게 보내는 마지막 메시지 (샘플 문구 형식) */
+export function finalMessage({ dates, title, name, withSource }) {
+  const what = withSource ? '견적서 및 원천자료' : '견적서';
+  const thanks = dates.length > 1 ? '며칠 간 고생 많으셨습니다!' : '고생 많으셨습니다!';
+  return `안녕하세요. ${shortRange(dates)} ${title} 촬영 건 카메라팀 장비차량기사 ${name} ${what} 보내드립니다. ${thanks}`;
 }
 
 // ---------------------------------------------------------------- 엑셀 생성

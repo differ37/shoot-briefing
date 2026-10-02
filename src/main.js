@@ -5,9 +5,10 @@ import { GitHubStore, LocalStore, PrefixedStore } from './storage.js';
 import { Library, versionKeyFromName } from './library.js';
 import { analyzeTimetable, compareVersions, testKey } from './claude.js';
 import { openPdf, pdfToAnalysisImages, pdfThumbnail, renderPagesInto } from './pdf.js';
+import { extractConti, matchSchedule, renderRegion, thumbRenderer } from './conti.js';
 import { computeMarks } from './diff.js';
 import { openNaver, openKakao, copyText } from './nav.js';
-import { buildQuote, defaultContent, downloadBlob, hasSavedProfile, loadProfile, quoteFileName, saveProfile, DEFAULT_ITEM, MAX_DAYS } from './quote.js';
+import { buildQuote, defaultContent, downloadBlob, finalMessage, hasSavedProfile, hasSavedSource, loadProfile, loadSource, prepareSourceImage, quoteFileName, saveProfile, saveSource, sourceDataUrl, sourceFile, DEFAULT_ITEM, MAX_DAYS } from './quote.js';
 import { appRepo, fetchAccounts, login, normId, passwordProblem, publishAccounts, publishUser, removeUser } from './vault.js';
 
 // ---------------------------------------------------------------- 설정
@@ -322,7 +323,11 @@ function renderLogin(message = '') {
       const data = await login(id, pw);
       saveSettings({ ...DEFAULTS, ...pick(data, SESSION_FIELDS), userId: normId(id) });
       // 견적서용 내 정보(암호화 저장)를 비밀번호가 있을 때 미리 풀어 둔다
-      getLibrary(mySpace()).then((lib) => loadProfile(lib.store, normId(id), pw)).then((p) => p && saveSettings({ quoteProfile: p })).catch(() => {});
+      getLibrary(mySpace()).then(async (lib) => {
+        const [p, src] = await Promise.all([loadProfile(lib.store, normId(id), pw).catch(() => null), loadSource(lib.store, normId(id), pw).catch(() => null)]);
+        if (p) saveSettings({ quoteProfile: p });
+        if (src) storeLocalSource(src);
+      }).catch(() => {});
       toast(`${displayName(normId(id))}님, 환영합니다`);
       location.hash = L(mySpace());
     } catch (err) {
@@ -440,6 +445,41 @@ async function renderHome(space) {
       if (mc?.time && el) el.innerHTML = `${icon.clock}${p.prep?.gather ? `${h(p.prep.gather)} 집합 · ` : ''}${h(mc.time)} 도착 · ${h(mc.location_name || '')}`;
     }).catch(() => {});
   }
+}
+
+// ---------------------------------------------------------------- 콘티 크게 보기
+const CONTI_KEY = 'shoot-briefing.conti';
+function openContiViewer(pdf, row, start = 0) {
+  const el = document.createElement('div');
+  el.className = 'sheet-backdrop conti-viewer';
+  el.innerHTML = `<div class="cv-box"><img alt=""><div class="cv-bar"><button type="button" class="cv-prev" aria-label="이전">${icon.back}</button><span class="cv-count"></span><button type="button" class="cv-next" aria-label="다음">${icon.chevron}</button><button type="button" class="cv-close">닫기</button></div></div>`;
+  document.body.appendChild(el);
+  requestAnimationFrame(() => el.classList.add('show'));
+  const img = $('img', el);
+  const urls = new Map();
+  let k = start;
+  const show = async () => {
+    $('.cv-count', el).textContent = `${k + 1} / ${row.images.length}`;
+    $('.cv-prev', el).disabled = k === 0;
+    $('.cv-next', el).disabled = k === row.images.length - 1;
+    if (!urls.has(k)) {
+      const w = Math.min(2000, Math.max(window.innerWidth, 600) * Math.min(2, window.devicePixelRatio || 1));
+      urls.set(k, renderRegion(pdf, row.page, row.images[k], w).then((blob) => URL.createObjectURL(blob)));
+    }
+    const want = k;
+    const url = await urls.get(k);
+    if (want === k) img.src = url;
+  };
+  const close = () => {
+    el.classList.remove('show');
+    setTimeout(() => { el.remove(); urls.forEach((p) => p.then((u) => URL.revokeObjectURL(u))); }, 300);
+  };
+  el.addEventListener('click', (e) => {
+    if (e.target === el || e.target.closest('.cv-close')) close();
+    else if (e.target.closest('.cv-prev') && k > 0) { k--; show(); }
+    else if (e.target.closest('.cv-next') && k < row.images.length - 1) { k++; show(); }
+  });
+  show();
 }
 
 // ---------------------------------------------------------------- 프로젝트 브리핑
@@ -608,17 +648,19 @@ async function renderProject(space, pid, vid) {
   <section class="section">
     <div class="section-head">
       <h2 class="section-title">${icon.clock} 진행 타임라인</h2>
+      <button class="conti-toggle" id="contiToggle" aria-pressed="false">${icon.camera}<span>콘티</span></button>
       ${tracks.length > 1 ? `<div class="seg" id="trackSeg"><button class="on" data-track="">전체</button>${tracks.map((t) => `<button data-track="${h(t)}">${h(t)}</button>`).join('')}</div>` : ''}
     </div>
     <ol class="timeline">
       ${sched.map((s) => `
-      <li class="tl ${kindClass[s.kind] || 'k-etc'}" data-track="${h(s.track)}">
+      <li class="tl ${kindClass[s.kind] || 'k-etc'}" data-track="${h(s.track)}" data-i="${s.i}">
         <div class="tl-time"><strong>${s.next_day ? '<i>익일</i>' : ''}${h(s.start)}</strong><span>${h(s.end)}</span></div>
         <div class="tl-body">
           <div class="tl-head"><span class="tl-kind">${h(s.kind)}</span>${tracks.length > 1 && s.track ? `<span class="tl-track">${h(s.track)}</span>` : ''}${s.minutes ? `<span class="tl-min">${s.minutes}분</span>` : ''}${badge(marks.schedule.get(s.i))}</div>
           <div class="tl-title">${titleLines(s.title)}</div>
           ${s.location_name ? `<span class="tl-loc">${h(s.location_name)}</span>` : ''}
           ${s.details ? para(s.details, 'tl-details') : ''}
+          <div class="tl-conti" hidden></div>
         </div>
       </li>`).join('')}
     </ol>
@@ -697,6 +739,69 @@ async function renderProject(space, pid, vid) {
 
   let pdfCache = null;
   const getPdfBlob = async () => (pdfCache ||= await lib.getPdf(pid, meta.id));
+  // --- 진행표 콘티 그림 (원본 PDF에서 같은 시간 줄의 그림을 잘라 보여줌)
+  let contiState = null; // null | 'loading' | 'done'
+  const contiOn = () => { try { return localStorage.getItem(CONTI_KEY) !== 'off'; } catch { return true; } };
+  const setContiVisible = (on) => {
+    $('#contiToggle')?.setAttribute('aria-pressed', String(on));
+    $$('.tl-conti').forEach((el) => { el.hidden = !on || !el.childElementCount; });
+  };
+  const loadConti = async () => {
+    if (contiState) return setContiVisible(true);
+    contiState = 'loading';
+    const btn = $('#contiToggle');
+    btn?.classList.add('busy');
+    try {
+      const pdf = await openPdf(await (await getPdfBlob()).arrayBuffer());
+      const { rows } = await extractConti(pdf);
+      const found = matchSchedule(a.schedule, rows);
+      if (!found.size) { toast('이 타임테이블에서는 콘티 그림을 찾지 못했어요'); contiState = 'done'; return; }
+      const dpr = Math.min(2, window.devicePixelRatio || 1);
+      const thumb = thumbRenderer(pdf);
+      // 자리부터 모두 만들고 그림은 위에서부터 채운다
+      for (const [i, row] of found) {
+        const box = $(`.tl[data-i="${i}"] .tl-conti`);
+        if (!box) continue;
+        box.innerHTML = row.images.map((_, k) => `<button type="button" class="conti-thumb" data-k="${k}" aria-label="콘티 크게 보기"></button>`).join('');
+        box.hidden = !contiOn();
+        box.addEventListener('click', (e) => {
+          const t = e.target.closest('.conti-thumb');
+          if (t) openContiViewer(pdf, row, Number(t.dataset.k));
+        });
+      }
+      for (const [i, row] of found) {
+        const box = $(`.tl[data-i="${i}"] .tl-conti`);
+        if (!box) continue;
+        for (const [k, b] of row.images.entries()) {
+          const img = new Image();
+          img.alt = '';
+          img.src = URL.createObjectURL(await thumb(row.page, b, 96 * dpr));
+          box.querySelector(`[data-k="${k}"]`)?.appendChild(img);
+        }
+      }
+      contiState = 'done';
+    } catch (err) {
+      console.error(err);
+      toast('콘티 그림을 불러오지 못했어요');
+      contiState = null;
+    } finally {
+      btn?.classList.remove('busy');
+    }
+  };
+  $('#contiToggle')?.addEventListener('click', () => {
+    const on = $('#contiToggle').getAttribute('aria-pressed') !== 'true';
+    try { localStorage.setItem(CONTI_KEY, on ? 'on' : 'off'); } catch {}
+    if (on) loadConti(); else setContiVisible(false);
+  });
+  // 켜 둔 상태면 진행표가 화면 가까이 왔을 때 불러온다 (데이터 절약)
+  if ($('.timeline') && contiOn()) {
+    $('#contiToggle').setAttribute('aria-pressed', 'true');
+    const io = new IntersectionObserver((es) => {
+      if (es.some((x) => x.isIntersecting)) { io.disconnect(); loadConti(); }
+    }, { rootMargin: '300px' });
+    io.observe($('.timeline'));
+  }
+
   $('#showPdf').addEventListener('click', async (e) => {
     const box = $('#pdfPages');
     if (box.childElementCount) { box.innerHTML = ''; e.currentTarget.innerHTML = `${icon.doc} 원본 페이지 보기`; return; }
@@ -787,6 +892,10 @@ const LAST_PRICE_KEY = 'shoot-briefing.lastPrice';
 const won = (n) => (Number(n) || 0).toLocaleString('ko-KR');
 const digits = (s) => String(s || '').replace(/[^\d]/g, '');
 
+const SOURCE_KEY = 'shoot-briefing.source';
+function loadLocalSource() { try { return JSON.parse(localStorage.getItem(SOURCE_KEY) || 'null'); } catch { return null; } }
+function storeLocalSource(src) { try { localStorage.setItem(SOURCE_KEY, JSON.stringify(src)); } catch {} }
+
 async function openQuoteSheet() {
   const space = mySpace();
   const el = document.createElement('div');
@@ -838,7 +947,7 @@ async function openQuoteSheet() {
     next.addEventListener('click', () => renderForm().catch((err) => toast(err.message)));
   };
 
-  // 2단계: 금액·내용 입력 → 다운로드
+  // 2단계: 금액·내용 입력 → 다운로드 / 최종 문구
   const renderForm = async () => {
     box.innerHTML = '<div class="skeleton"></div>';
     const chosen = projects.filter((p) => selected.has(p.id)).sort((a, b) => a.date.localeCompare(b.date));
@@ -847,12 +956,21 @@ async function openQuoteSheet() {
     try { lastPrice = localStorage.getItem(LAST_PRICE_KEY) || ''; } catch {}
     const first = chosen[0];
     const prof = settings.quoteProfile || null;
-    const savedRemote = !prof && await hasSavedProfile(lib.store).catch(() => false);
+    let source = loadLocalSource();
+    let sourceChanged = false;
+    const [remoteProfile, remoteSource] = await Promise.all([
+      prof ? false : hasSavedProfile(lib.store).catch(() => false),
+      source ? false : hasSavedSource(lib.store).catch(() => false),
+    ]);
+    const savedRemote = remoteProfile || remoteSource;
     const profileFields = (p = {}) => `
       <label>이름<input name="name" value="${h(p.name || displayName(settings.userId) || '')}" autocomplete="off"></label>
       <label>원천 (주민번호 + 주소)<input name="idAddr" value="${h(p.idAddr || '')}" autocomplete="off" placeholder="000000-0000000 서울시 …"></label>
       <label>전화번호<input name="phone" value="${h(p.phone || '')}" inputmode="tel" autocomplete="off" placeholder="010-0000-0000"></label>
       <label>입금 계좌<input name="bank" value="${h(p.bank || '')}" autocomplete="off" placeholder="은행 계좌번호"></label>`;
+    const sourceHtml = () => source
+      ? `<img class="q-src-img" src="${sourceDataUrl(source)}" alt="원천자료"><button type="button" class="btn ghost" data-src-pick>다른 이미지로 바꾸기</button>`
+      : `<button type="button" class="btn ghost" data-src-pick>${icon.upload} 이미지 선택</button>`;
 
     box.innerHTML = `
       <form class="form" autocomplete="off">
@@ -875,18 +993,24 @@ async function openQuoteSheet() {
         </details>
 
         <details class="q-more" ${prof ? '' : 'open'}>
-          <summary>내 정보 ${prof ? `<span class="q-saved">${icon.check} 저장됨</span>` : ''} ${icon.chevron}</summary>
-          ${savedRemote ? `<p class="muted small">저장된 내 정보가 있어요. 비밀번호를 넣고 불러오세요.</p>` : ''}
+          <summary>내 정보 · 원천자료 ${prof ? `<span class="q-saved">${icon.check} 저장됨</span>` : ''} ${icon.chevron}</summary>
+          ${savedRemote ? `<p class="muted small" id="qRemoteHint">저장된 내 정보가 있어요. 비밀번호를 넣고 불러오세요.</p>` : ''}
           <div id="qProfile">${profileFields(prof || {})}</div>
+          <div class="q-src">
+            <span class="q-src-label">원천자료 이미지 <span class="opt">신분증·통장 사본</span></span>
+            <div id="qSource">${sourceHtml()}</div>
+            <input type="file" accept="image/*" id="qSourceFile" hidden>
+          </div>
           <label>내 비밀번호 <span class="opt">${savedRemote ? '불러오기 · ' : ''}정보를 저장할 때만</span>
             <span class="unlock-inline"><input type="password" name="pw" autocomplete="current-password">${savedRemote ? '<button type="button" class="btn ghost" data-unlock>불러오기</button>' : ''}</span></label>
-          <p class="muted small">개인정보는 내 비밀번호로 암호화해 저장돼요. 다른 사람은 열어볼 수 없어요.</p>
+          <p class="muted small">개인정보와 원천자료는 내 비밀번호로 암호화해 저장돼요. 다른 사람은 열어볼 수 없어요.</p>
         </details>
 
-        <div class="sheet-actions">
+        <div class="sheet-actions q-actions">
           <button type="button" class="btn ghost" data-back>이전</button>
           <span class="spacer"></span>
-          <button type="submit" class="btn">견적서 다운로드</button>
+          <button type="button" class="btn ghost" data-download>견적서 다운로드</button>
+          <button type="submit" class="btn">최종 문구 생성</button>
         </div>
       </form>`;
     const form = $('form', box);
@@ -904,15 +1028,34 @@ async function openQuoteSheet() {
     prices[0].focus();
     $('[data-back]', form).addEventListener('click', renderPick);
 
+    // 원천자료 이미지 고르기
+    const fileInput = $('#qSourceFile', form);
+    form.addEventListener('click', (e) => { if (e.target.closest('[data-src-pick]')) fileInput.click(); });
+    fileInput.addEventListener('change', async () => {
+      const f = fileInput.files[0];
+      fileInput.value = '';
+      if (!f) return;
+      try {
+        source = await prepareSourceImage(f);
+        sourceChanged = true;
+        $('#qSource', form).innerHTML = sourceHtml();
+        toast('비밀번호를 넣고 진행하면 원천자료가 저장돼요');
+      } catch { toast('이미지를 읽지 못했어요'); }
+    });
+
     const pwInput = $('input[name=pw]', form);
     $('[data-unlock]', form)?.addEventListener('click', async (e) => {
       const b = e.target;
       b.disabled = true;
       try {
-        const p = await loadProfile(lib.store, settings.userId, pwInput.value);
-        saveSettings({ quoteProfile: p });
-        $('#qProfile', form).innerHTML = profileFields(p);
+        const [p, src] = await Promise.all([
+          remoteProfile ? loadProfile(lib.store, settings.userId, pwInput.value) : null,
+          remoteSource ? loadSource(lib.store, settings.userId, pwInput.value) : null,
+        ]);
+        if (p) { saveSettings({ quoteProfile: p }); $('#qProfile', form).innerHTML = profileFields(p); }
+        if (src) { source = src; storeLocalSource(src); $('#qSource', form).innerHTML = sourceHtml(); }
         b.remove();
+        $('#qRemoteHint', form)?.remove();
         toast('내 정보를 불러왔어요');
       } catch {
         toast('비밀번호가 올바르지 않아요');
@@ -920,41 +1063,92 @@ async function openQuoteSheet() {
       }
     });
 
-    form.addEventListener('submit', async (e) => {
-      e.preventDefault();
+    // 입력 확인 → (바뀐 정보 저장) → 엑셀 만들기
+    const prepare = async () => {
       const v = Object.fromEntries(new FormData(form));
       const profile = { name: v.name.trim(), idAddr: v.idAddr.trim(), phone: v.phone.trim(), bank: v.bank.trim() };
       const priceList = prices.map((x) => Number(digits(x.value)));
-      if (priceList.some((n) => !n)) return toast('모든 날의 금액을 입력하세요');
-      if (!profile.name) return toast('이름을 입력하세요');
-      const btn = $('button[type=submit]', form);
-      btn.disabled = true;
+      if (priceList.some((n) => !n)) throw new Error('모든 날의 금액을 입력하세요');
+      if (!profile.name) throw new Error('이름을 입력하세요');
+      const profileChanged = JSON.stringify(profile) !== JSON.stringify(settings.quoteProfile || null);
+      let unsaved = (profileChanged || sourceChanged) && !v.pw;
+      if ((profileChanged || sourceChanged) && v.pw) {
+        try { await login(settings.userId, v.pw); } catch { throw new Error('비밀번호가 올바르지 않아요'); } // 틀린 비밀번호로 암호화하지 않도록
+        if (profileChanged) { await saveProfile(lib.store, settings.userId, v.pw, profile); saveSettings({ quoteProfile: profile }); }
+        if (sourceChanged && source) { await saveSource(lib.store, settings.userId, v.pw, source); storeLocalSource(source); sourceChanged = false; }
+      }
+      const contents = $$('input[name=content]', form).map((x) => x.value.trim());
+      const dates = chosen.map((p) => p.date);
+      const title = v.title.trim();
+      const blob = await buildQuote({
+        dates, to: v.to.trim(), title, profile,
+        days: chosen.map((p, i) => ({ item: v.item.trim(), content: contents[i], price: priceList[i] })),
+      });
+      try { localStorage.setItem(LAST_PRICE_KEY, String(priceList[0])); } catch {}
+      return { blob, fileName: quoteFileName(dates, title, profile.name), dates, title, profile, unsaved };
+    };
+    const run = async (btn, then) => {
+      const label = btn.textContent;
+      $$('.q-actions button', form).forEach((b) => (b.disabled = true));
       btn.textContent = '만드는 중…';
       try {
-        // 내 정보가 바뀌었으면 암호화해 저장 (비밀번호를 넣었을 때만)
-        const changed = JSON.stringify(profile) !== JSON.stringify(settings.quoteProfile || null);
-        if (changed && v.pw) {
-          await login(settings.userId, v.pw); // 비밀번호 확인 (틀린 비밀번호로 암호화하지 않도록)
-          await saveProfile(lib.store, settings.userId, v.pw, profile);
-          saveSettings({ quoteProfile: profile });
-        }
-        const contents = $$('input[name=content]', form).map((x) => x.value.trim());
-        const blob = await buildQuote({
-          dates: chosen.map((p) => p.date),
-          to: v.to.trim(),
-          title: v.title.trim(),
-          profile,
-          days: chosen.map((p, i) => ({ item: v.item.trim(), content: contents[i], price: priceList[i] })),
-        });
-        downloadBlob(blob, quoteFileName(chosen.map((p) => p.date), v.title.trim(), profile.name));
-        try { localStorage.setItem(LAST_PRICE_KEY, String(priceList[0])); } catch {}
-        close();
-        toast(changed && !v.pw ? '견적서를 받았어요 · 비밀번호를 넣으면 내 정보가 저장돼요' : '견적서를 받았어요');
+        await then(await prepare());
       } catch (err) {
         console.error(err);
-        toast(/비밀번호/.test(err.message) ? '비밀번호가 올바르지 않아요' : err.message);
-        btn.disabled = false;
-        btn.textContent = '견적서 다운로드';
+        toast(err.message);
+        $$('.q-actions button', form).forEach((b) => (b.disabled = false));
+        btn.textContent = label;
+      }
+    };
+    $('[data-download]', form).addEventListener('click', (e) => run(e.currentTarget, (r) => {
+      downloadBlob(r.blob, r.fileName);
+      close();
+      toast(r.unsaved ? '견적서를 받았어요 · 비밀번호를 넣으면 내 정보가 저장돼요' : '견적서를 받았어요');
+    }));
+    form.addEventListener('submit', (e) => {
+      e.preventDefault();
+      run($('button[type=submit]', form), (r) => renderFinal(r));
+    });
+  };
+
+  // 3단계: PD에게 보낼 최종 문구 + 견적서·원천자료 공유
+  const renderFinal = ({ blob, fileName, dates, title, profile, unsaved }) => {
+    const source = loadLocalSource();
+    const xlsx = new File([blob], fileName, { type: blob.type });
+    const files = [xlsx, ...(source ? [sourceFile(source, profile.name)] : [])];
+    const canShareFiles = !!navigator.canShare?.({ files });
+    box.innerHTML = `
+      <div class="form">
+        <p class="eyebrow">최종 문구</p>
+        <h2>PD님께 보낼 내용</h2>
+        <div class="q-files">
+          <div class="q-file">${icon.doc}<span>${h(fileName)}</span></div>
+          ${source ? `<div class="q-file q-file-img"><img src="${sourceDataUrl(source)}" alt=""><span>원천자료 이미지</span></div>` : `<p class="muted small">원천자료 이미지가 없어요. 이전 화면의 "내 정보 · 원천자료"에서 넣을 수 있어요.</p>`}
+        </div>
+        <label>메시지<textarea name="msg" rows="4">${h(finalMessage({ dates, title, name: profile.name, withSource: !!source }))}</textarea></label>
+        <div class="q-final-actions">
+          ${canShareFiles ? `<button type="button" class="btn block" data-share>${icon.upload} 카톡 등으로 공유 (문구 자동 복사)</button>` : ''}
+          <button type="button" class="btn ${canShareFiles ? 'ghost' : ''} block" data-copy-msg>${icon.copy} 문구 복사</button>
+          <div class="row-gap">
+            <button type="button" class="btn ghost" data-dl-xlsx>견적서 받기</button>
+            ${source ? '<button type="button" class="btn ghost" data-dl-src>원천자료 받기</button>' : ''}
+            <span class="spacer"></span>
+            <button type="button" class="btn ghost" data-cancel>닫기</button>
+          </div>
+        </div>
+        ${canShareFiles ? '<p class="muted small">카카오톡은 파일과 글을 함께 보내면 글이 빠질 수 있어요. 파일을 보낸 뒤 채팅창에 붙여넣기 하세요.</p>' : ''}
+      </div>`;
+    if (unsaved) toast('비밀번호를 넣지 않아 내 정보는 저장되지 않았어요');
+    const msg = () => $('textarea[name=msg]', box).value;
+    $('[data-copy-msg]', box).addEventListener('click', async () => toast((await copyText(msg())) ? '문구를 복사했어요' : '복사하지 못했어요'));
+    $('[data-dl-xlsx]', box).addEventListener('click', () => downloadBlob(blob, fileName));
+    $('[data-dl-src]', box)?.addEventListener('click', () => downloadBlob(files[1], files[1].name));
+    $('[data-share]', box)?.addEventListener('click', async () => {
+      await copyText(msg());
+      try {
+        await navigator.share({ files, text: msg() });
+      } catch (err) {
+        if (err.name !== 'AbortError') toast('공유하지 못했어요 · 문구는 복사돼 있어요');
       }
     });
   };
@@ -965,7 +1159,7 @@ document.addEventListener('click', (e) => { if (e.target.closest('[data-action="
 
 // ---------------------------------------------------------------- 설정
 function logout() {
-  try { localStorage.removeItem(SETTINGS_KEY); } catch {}
+  try { localStorage.removeItem(SETTINGS_KEY); localStorage.removeItem(SOURCE_KEY); } catch {}
   settings = loadSettings();
   libraries.clear();
   accounts = null;
