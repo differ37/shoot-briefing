@@ -9,7 +9,13 @@
 const ITER = 600000;
 const enc = new TextEncoder();
 const dec = new TextDecoder();
-const b64 = (buf) => btoa(String.fromCharCode(...new Uint8Array(buf)));
+// 큰 데이터(원천자료 이미지 등)는 한 번에 펼치면 스택이 넘치므로 나눠서 변환
+const b64 = (buf) => {
+  const bytes = new Uint8Array(buf);
+  let bin = '';
+  for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+  return btoa(bin);
+};
 const unb64 = (s) => Uint8Array.from(atob(s), (c) => c.charCodeAt(0));
 
 export const normId = (id) => String(id || '').trim().toLowerCase();
