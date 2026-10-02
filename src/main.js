@@ -330,7 +330,9 @@ function renderLogin(message = '') {
         if (src) storeLocalSource(src);
       }).catch(() => {});
       toast(`${displayName(normId(id))}님, 환영합니다`);
-      location.hash = L(mySpace());
+      // 로그인 화면이 이미 내 브리핑 주소(#/s/jj)에서 떴으면 주소가 안 바뀌어 화면 전환이 일어나지 않으므로 직접 그린다
+      const target = L(mySpace());
+      if (location.hash === target) route(); else location.hash = target;
     } catch (err) {
       $('#loginMsg').textContent = err.message;
       btn.disabled = false;
