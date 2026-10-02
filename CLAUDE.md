@@ -30,6 +30,9 @@ npm run build
 - `src/vault.js` — 아이디/비밀번호 로그인(서버 없음), 공개 계정 목록
 - `src/diff.js` — 이전 버전 대비 항목별 NEW/변경 배지
 - `src/nav.js` — 네이버지도·카카오맵/내비 연결. 카카오 JS 키는 `main.js`의 `SITE_KAKAO_KEY`(공개 키·도메인 제한, Kakao Developers 앱 'beta test'에서 카카오맵 사용 설정 ON 필요). 계정별 설정의 키가 있으면 그게 우선
+- `src/quote.js` — 견적서 엑셀 생성. `public/quote-template.xlsx`(실제 견적서에서 개인정보·촬영 내용을 비운 틀)의 시트 XML에 값만 채움(fflate).
+  DAY 줄은 15~27행(7일 이하면 한 줄씩 띄움), H12 수식은 `=G28`. 개인정보(이름·원천·전화·계좌)는 비밀번호로 암호화해 각자 공간의 `quote-profile.json`에 저장,
+  로그인 때 풀어서 localStorage 설정(`quoteProfile`)에 둔다. **틀이나 코드에 개인정보를 절대 넣지 말 것.**
 - `src/profiles.js` — 표시 이름·얼굴 아이콘(jj=준연/정/아이언맨풍, hk=효권/서/슈퍼맨풍, sh=신훈/강/배트맨풍, 자체 SVG)
 
 ## 계정·권한

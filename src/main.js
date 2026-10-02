@@ -7,6 +7,7 @@ import { analyzeTimetable, compareVersions, testKey } from './claude.js';
 import { openPdf, pdfToAnalysisImages, pdfThumbnail, renderPagesInto } from './pdf.js';
 import { computeMarks } from './diff.js';
 import { openNaver, openKakao, copyText } from './nav.js';
+import { buildQuote, defaultContent, downloadBlob, hasSavedProfile, loadProfile, quoteFileName, saveProfile, DEFAULT_ITEM, MAX_DAYS } from './quote.js';
 import { appRepo, fetchAccounts, login, normId, passwordProblem, publishAccounts, publishUser, removeUser } from './vault.js';
 
 // ---------------------------------------------------------------- 설정
@@ -220,6 +221,7 @@ async function openDrawer() {
     ${item(accounts.find((a) => a.id === me) || { id: me })}
     ${others.length ? `<p class="d-label">다른 사람 스케줄${isAdmin() ? '' : ' · 보기 전용'}</p>${others.map(item).join('')}` : ''}
     <div class="d-foot">
+      ${canEdit(me) ? `<button class="d-link" data-action="quote">${icon.doc}견적서 만들기</button>` : ''}
       <a class="d-link" href="#/settings">${icon.gear}${isAdmin() ? '설정 · 사용자 관리' : '내 계정'}</a>
       <button class="d-link danger" data-logout>${icon.trash}로그아웃</button>
     </div>
@@ -228,7 +230,7 @@ async function openDrawer() {
   requestAnimationFrame(() => el.classList.add('show'));
   const close = () => { el.classList.remove('show'); setTimeout(() => el.remove(), 250); };
   el.addEventListener('click', (e) => {
-    if (e.target === el || e.target.closest('a')) close();
+    if (e.target === el || e.target.closest('a, [data-action="quote"]')) close();
     if (e.target.closest('[data-logout]')) { logout(); close(); toast('로그아웃했어요'); location.hash = '#/'; route(); }
   });
 }
@@ -319,6 +321,8 @@ function renderLogin(message = '') {
     try {
       const data = await login(id, pw);
       saveSettings({ ...DEFAULTS, ...pick(data, SESSION_FIELDS), userId: normId(id) });
+      // 견적서용 내 정보(암호화 저장)를 비밀번호가 있을 때 미리 풀어 둔다
+      getLibrary(mySpace()).then((lib) => loadProfile(lib.store, normId(id), pw)).then((p) => p && saveSettings({ quoteProfile: p })).catch(() => {});
       toast(`${displayName(normId(id))}님, 환영합니다`);
       location.hash = L(mySpace());
     } catch (err) {
@@ -408,6 +412,9 @@ async function renderHome(space) {
   app.innerHTML = shell(`
     ${featured}
     ${later.length ? `<section class="section"><h2 class="section-title">${icon.clock} 예정된 촬영 <span class="count">${later.length}</span></h2>${byMonth(later)}</section>` : ''}
+    ${space === mySpace() && canEdit(space) && projects.length ? `<section class="section">
+      <button class="quote-cta" data-action="quote">${icon.doc}<span><b>견적서 다운로드</b><small>끝낸 일정을 골라 금액만 넣으면 엑셀 견적서가 만들어져요</small></span>${icon.chevron}</button>
+    </section>` : ''}
     ${canUpload(space) ? `<section class="section">
       <div class="dropzone" data-action="upload" id="dropzone">
         ${icon.upload}
@@ -774,6 +781,187 @@ function openPrepModal(lib, project, callTime) {
     save({ gather, depart });
   });
 }
+
+// ---------------------------------------------------------------- 견적서
+const LAST_PRICE_KEY = 'shoot-briefing.lastPrice';
+const won = (n) => (Number(n) || 0).toLocaleString('ko-KR');
+const digits = (s) => String(s || '').replace(/[^\d]/g, '');
+
+async function openQuoteSheet() {
+  const space = mySpace();
+  const el = document.createElement('div');
+  el.className = 'sheet-backdrop';
+  el.innerHTML = '<div class="sheet quote-sheet"><div class="skeleton"></div></div>';
+  document.body.appendChild(el);
+  requestAnimationFrame(() => el.classList.add('show'));
+  const close = () => { el.classList.remove('show'); setTimeout(() => el.remove(), 300); };
+  el.addEventListener('click', (e) => { if (e.target === el || e.target.closest('[data-cancel]')) close(); });
+  const box = $('.sheet', el);
+
+  let lib;
+  try { lib = await getLibrary(space); } catch (err) { close(); return toast(err.message); }
+  const projects = lib.index.projects.filter((p) => p.date).sort((a, b) => b.date.localeCompare(a.date));
+  const selected = new Set();
+
+  // 1단계: 일정 고르기
+  const renderPick = () => {
+    const today = new Date().toISOString().slice(0, 10);
+    box.innerHTML = `
+      <p class="eyebrow">견적서 만들기 · 1/2</p>
+      <h2>어떤 일정인가요?</h2>
+      <p class="muted small">여러 날 촬영은 함께 골라 주세요. 하루씩 DAY1, DAY2…로 들어가요.</p>
+      ${projects.length ? `<div class="q-list">${projects.map((p) => {
+        const [, m, d] = p.date.split('-').map(Number);
+        return `<label class="q-item ${selected.has(p.id) ? 'on' : ''}">
+          <input type="checkbox" value="${h(p.id)}" ${selected.has(p.id) ? 'checked' : ''}>
+          <span class="q-date"><b>${m}.${d}</b><small>${h(p.weekday || '')}</small></span>
+          <span class="q-body"><strong>${h(p.title)}</strong><small>${h(p.production || '')}${p.date > today ? ' · 예정' : ''}</small></span>
+          ${icon.check}
+        </label>`;
+      }).join('')}</div>` : '<p class="empty small">아직 올린 촬영이 없어요.</p>'}
+      <div class="sheet-actions">
+        <button type="button" class="btn ghost" data-cancel>취소</button>
+        <button type="button" class="btn" data-next disabled>다음</button>
+      </div>`;
+    const next = $('[data-next]', box);
+    const sync = () => {
+      next.disabled = !selected.size;
+      next.textContent = selected.size ? `${selected.size}일 선택 · 다음` : '다음';
+    };
+    $$('.q-item input', box).forEach((cb) => cb.addEventListener('change', () => {
+      if (cb.checked && selected.size >= MAX_DAYS) { cb.checked = false; return toast(`한 견적서에는 ${MAX_DAYS}일까지 넣을 수 있어요`); }
+      cb.checked ? selected.add(cb.value) : selected.delete(cb.value);
+      cb.closest('.q-item').classList.toggle('on', cb.checked);
+      sync();
+    }));
+    sync();
+    next.addEventListener('click', () => renderForm().catch((err) => toast(err.message)));
+  };
+
+  // 2단계: 금액·내용 입력 → 다운로드
+  const renderForm = async () => {
+    box.innerHTML = '<div class="skeleton"></div>';
+    const chosen = projects.filter((p) => selected.has(p.id)).sort((a, b) => a.date.localeCompare(b.date));
+    const analyses = await Promise.all(chosen.map((p) => lib.getVersion(p.id, lib.latest(p).id).then((r) => r?.analysis).catch(() => null)));
+    let lastPrice = '';
+    try { lastPrice = localStorage.getItem(LAST_PRICE_KEY) || ''; } catch {}
+    const first = chosen[0];
+    const prof = settings.quoteProfile || null;
+    const savedRemote = !prof && await hasSavedProfile(lib.store).catch(() => false);
+    const profileFields = (p = {}) => `
+      <label>이름<input name="name" value="${h(p.name || displayName(settings.userId) || '')}" autocomplete="off"></label>
+      <label>원천 (주민번호 + 주소)<input name="idAddr" value="${h(p.idAddr || '')}" autocomplete="off" placeholder="000000-0000000 서울시 …"></label>
+      <label>전화번호<input name="phone" value="${h(p.phone || '')}" inputmode="tel" autocomplete="off" placeholder="010-0000-0000"></label>
+      <label>입금 계좌<input name="bank" value="${h(p.bank || '')}" autocomplete="off" placeholder="은행 계좌번호"></label>`;
+
+    box.innerHTML = `
+      <form class="form" autocomplete="off">
+        <p class="eyebrow">견적서 만들기 · 2/2</p>
+        <h2>견적 금액</h2>
+        <div class="q-days">${chosen.map((p, i) => `
+          <div class="q-day">
+            <div class="q-day-head"><b>DAY${i + 1}</b><span>${h(prettyDate(p.date, p.weekday))}</span></div>
+            <label class="q-price">공급가액<span class="won-input"><input name="price" inputmode="numeric" placeholder="예: 500,000" value="${h(lastPrice ? won(lastPrice) : '')}"><em>원</em></span></label>
+            <label>내용<input name="content" value="${h(defaultContent(p.date, analyses[i]))}"></label>
+          </div>`).join('')}
+        </div>
+        <p class="q-total">합계 <b id="qTotal">0</b>원</p>
+
+        <details class="q-more">
+          <summary>수신 · 품목 · 품명 ${icon.chevron}</summary>
+          <label>수신 (프로덕션)<input name="to" value="${h(first.production || '')}"></label>
+          <label>품목 (촬영 이름)<input name="title" value="${h(first.title || '')}"></label>
+          <label>품명<input name="item" value="${h(DEFAULT_ITEM)}"></label>
+        </details>
+
+        <details class="q-more" ${prof ? '' : 'open'}>
+          <summary>내 정보 ${prof ? `<span class="q-saved">${icon.check} 저장됨</span>` : ''} ${icon.chevron}</summary>
+          ${savedRemote ? `<p class="muted small">저장된 내 정보가 있어요. 비밀번호를 넣고 불러오세요.</p>` : ''}
+          <div id="qProfile">${profileFields(prof || {})}</div>
+          <label>내 비밀번호 <span class="opt">${savedRemote ? '불러오기 · ' : ''}정보를 저장할 때만</span>
+            <span class="unlock-inline"><input type="password" name="pw" autocomplete="current-password">${savedRemote ? '<button type="button" class="btn ghost" data-unlock>불러오기</button>' : ''}</span></label>
+          <p class="muted small">개인정보는 내 비밀번호로 암호화해 저장돼요. 다른 사람은 열어볼 수 없어요.</p>
+        </details>
+
+        <div class="sheet-actions">
+          <button type="button" class="btn ghost" data-back>이전</button>
+          <span class="spacer"></span>
+          <button type="submit" class="btn">견적서 다운로드</button>
+        </div>
+      </form>`;
+    const form = $('form', box);
+    const prices = $$('input[name=price]', form);
+    const updateTotal = () => { $('#qTotal', form).textContent = won(prices.reduce((s, x) => s + Number(digits(x.value)), 0)); };
+    prices.forEach((inp, i) => inp.addEventListener('input', () => {
+      const v = digits(inp.value);
+      inp.value = v ? won(v) : '';
+      // 첫날 금액을 넣으면 아직 손대지 않은 다른 날에도 같은 금액을 채운다
+      if (i === 0) prices.slice(1).forEach((x) => { if (!x.dataset.touched) x.value = inp.value; });
+      else inp.dataset.touched = '1';
+      updateTotal();
+    }));
+    updateTotal();
+    prices[0].focus();
+    $('[data-back]', form).addEventListener('click', renderPick);
+
+    const pwInput = $('input[name=pw]', form);
+    $('[data-unlock]', form)?.addEventListener('click', async (e) => {
+      const b = e.target;
+      b.disabled = true;
+      try {
+        const p = await loadProfile(lib.store, settings.userId, pwInput.value);
+        saveSettings({ quoteProfile: p });
+        $('#qProfile', form).innerHTML = profileFields(p);
+        b.remove();
+        toast('내 정보를 불러왔어요');
+      } catch {
+        toast('비밀번호가 올바르지 않아요');
+        b.disabled = false;
+      }
+    });
+
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const v = Object.fromEntries(new FormData(form));
+      const profile = { name: v.name.trim(), idAddr: v.idAddr.trim(), phone: v.phone.trim(), bank: v.bank.trim() };
+      const priceList = prices.map((x) => Number(digits(x.value)));
+      if (priceList.some((n) => !n)) return toast('모든 날의 금액을 입력하세요');
+      if (!profile.name) return toast('이름을 입력하세요');
+      const btn = $('button[type=submit]', form);
+      btn.disabled = true;
+      btn.textContent = '만드는 중…';
+      try {
+        // 내 정보가 바뀌었으면 암호화해 저장 (비밀번호를 넣었을 때만)
+        const changed = JSON.stringify(profile) !== JSON.stringify(settings.quoteProfile || null);
+        if (changed && v.pw) {
+          await login(settings.userId, v.pw); // 비밀번호 확인 (틀린 비밀번호로 암호화하지 않도록)
+          await saveProfile(lib.store, settings.userId, v.pw, profile);
+          saveSettings({ quoteProfile: profile });
+        }
+        const contents = $$('input[name=content]', form).map((x) => x.value.trim());
+        const blob = await buildQuote({
+          dates: chosen.map((p) => p.date),
+          to: v.to.trim(),
+          title: v.title.trim(),
+          profile,
+          days: chosen.map((p, i) => ({ item: v.item.trim(), content: contents[i], price: priceList[i] })),
+        });
+        downloadBlob(blob, quoteFileName(chosen.map((p) => p.date), v.title.trim(), profile.name));
+        try { localStorage.setItem(LAST_PRICE_KEY, String(priceList[0])); } catch {}
+        close();
+        toast(changed && !v.pw ? '견적서를 받았어요 · 비밀번호를 넣으면 내 정보가 저장돼요' : '견적서를 받았어요');
+      } catch (err) {
+        console.error(err);
+        toast(/비밀번호/.test(err.message) ? '비밀번호가 올바르지 않아요' : err.message);
+        btn.disabled = false;
+        btn.textContent = '견적서 다운로드';
+      }
+    });
+  };
+
+  renderPick();
+}
+document.addEventListener('click', (e) => { if (e.target.closest('[data-action="quote"]')) openQuoteSheet(); });
 
 // ---------------------------------------------------------------- 설정
 function logout() {

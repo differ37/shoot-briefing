@@ -649,3 +649,46 @@ button.user-chip { border: 0; cursor: pointer; font: inherit; font-size: 14px; }
 .pick .avatar.lg { margin-bottom: 4px; }
 .user-top { grid-template-columns: 40px 1fr 130px; align-items: center; }
 .login-who { justify-content: flex-start; gap: 12px; } .login-who > span:last-child { flex: none; }
+
+/* ---------- 견적서 ---------- */
+.quote-cta { width: 100%; display: flex; align-items: center; gap: 14px; padding: 18px 20px; border: 0; border-radius: var(--radius); background: var(--card); box-shadow: var(--shadow); color: var(--text); font: inherit; text-align: left; cursor: pointer; }
+.quote-cta > svg:first-child { width: 28px; height: 28px; color: var(--accent); flex: none; }
+.quote-cta > svg:last-child { margin-left: auto; color: var(--faint); flex: none; }
+.quote-cta span { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.quote-cta b { font-size: 17px; }
+.quote-cta small { font-size: 13px; color: var(--muted); }
+.quote-cta:active { transform: scale(0.99); }
+.quote-sheet { width: min(520px, 100%); max-height: calc(100dvh - 32px); overflow-y: auto; overscroll-behavior: contain; }
+.q-list { display: grid; gap: 8px; margin: 14px 0 4px; }
+.q-item { display: flex; align-items: center; gap: 12px; padding: 10px 12px; border-radius: 14px; background: var(--bg-alt); cursor: pointer; border: 2px solid transparent; }
+.q-item input { position: absolute; opacity: 0; pointer-events: none; }
+.q-item.on { border-color: var(--accent); background: var(--accent-soft); }
+.q-item > svg { margin-left: auto; width: 20px; height: 20px; color: var(--accent); opacity: 0; flex: none; }
+.q-item.on > svg { opacity: 1; }
+.q-date { display: flex; flex-direction: column; align-items: center; width: 52px; flex: none; white-space: nowrap; }
+.q-date b { font-size: 16px; font-variant-numeric: tabular-nums; }
+.q-date small, .q-body small { font-size: 12px; color: var(--muted); }
+.q-body { display: flex; flex-direction: column; min-width: 0; }
+.q-body strong { font-size: 15px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.q-days { display: grid; gap: 12px; }
+.q-day { background: var(--bg-alt); border-radius: 16px; padding: 4px 14px 2px; }
+.q-day input { background: var(--card); }
+.q-day-head { display: flex; gap: 10px; align-items: baseline; padding-top: 10px; }
+.q-day-head b { color: var(--accent); }
+.q-day-head span { font-size: 14px; color: var(--muted); }
+.won-input { position: relative; display: block; }
+.won-input input { padding-right: 38px; font-size: 20px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.won-input em { position: absolute; right: 14px; top: 50%; transform: translateY(-50%); margin-top: 3px; font-style: normal; color: var(--muted); }
+.q-total { text-align: right; font-size: 15px; color: var(--muted); margin: 14px 2px 6px; }
+.q-total b { font-size: 24px; color: var(--text); font-variant-numeric: tabular-nums; margin: 0 2px 0 6px; }
+.q-more { border-top: 1px solid var(--line); padding: 4px 0; }
+.q-more summary { list-style: none; cursor: pointer; display: flex; align-items: center; gap: 8px; font-weight: 700; padding: 12px 0; }
+.q-more summary::-webkit-details-marker { display: none; }
+.q-more summary > svg { margin-left: auto; width: 18px; height: 18px; color: var(--faint); transition: transform .2s; }
+.q-more[open] summary > svg { transform: rotate(90deg); }
+.q-saved { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; color: var(--ok); }
+.q-saved svg { width: 14px; height: 14px; }
+.unlock-inline { display: flex; gap: 8px; align-items: center; }
+.unlock-inline input { flex: 1; min-width: 0; }
+.unlock-inline .btn { margin-top: 6px; white-space: nowrap; }
+.form .opt { font-weight: 500; color: var(--faint); font-size: 12px; margin-left: 4px; }
