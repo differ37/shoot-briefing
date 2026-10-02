@@ -89,6 +89,30 @@ export async function extractConti(pdf) {
       r.top = edges.filter((e) => e < mid - 2).pop() ?? -Infinity;
       r.bottom = edges.find((e) => e > mid + 2) ?? Infinity;
     }
+    // 표 머리의 "A CAM …" / "B CAM …" 글자로 A·B 캠 열을 나눈다 (두 열 사이 그림이 없는 가장 넓은 틈 = 경계)
+    const heads = {};
+    for (const t of tc.items) {
+      const m = t.str.match(/^\s*([AB])\s*CAM\b/i);
+      if (!m) continue;
+      const [x, y] = vp.convertToViewportPoint(t.transform[4], t.transform[5]);
+      if (y < times[0].y && !heads[m[1].toUpperCase()]) heads[m[1].toUpperCase()] = x + (t.width || 0) / 2;
+    }
+    let split = null;
+    if (heads.A != null && heads.B != null && heads.A < heads.B) {
+      const spans = images.map((b) => [b.x, b.x + b.w]).filter(([l, r]) => r > heads.A && l < heads.B).sort((a, b) => a[0] - b[0]);
+      let best = { gap: 0, at: (heads.A + heads.B) / 2 };
+      let reach = heads.A;
+      for (const [l, r] of spans) {
+        if (l - reach > best.gap) best = { gap: l - reach, at: (reach + l) / 2 };
+        reach = Math.max(reach, r);
+      }
+      if (heads.B - reach > best.gap) best = { gap: heads.B - reach, at: (reach + heads.B) / 2 };
+      split = best.at;
+    }
+    for (const b of images) {
+      b.page = p;
+      if (split != null) b.side = b.x + b.w / 2 < split ? 'A' : 'B';
+    }
     const top = pr[0].y - 40;
     for (const b of images) {
       const cy = b.y + b.h / 2;
@@ -107,7 +131,11 @@ export async function extractConti(pdf) {
   return { rows };
 }
 
-/** 진행표 항목 → PDF 줄. PDF 순서를 따라가며 시작 시간이 같은 줄을 찾는다. */
+/**
+ * 진행표 항목 → 그 항목의 콘티 그림 목록.
+ * PDF 순서를 따라가며 시작 시간이 같은 줄을 찾고, 항목의 끝 시간 전까지 이어지는 줄의 그림을 모은 뒤
+ * 항목이 A CAM / B CAM이면 그 캠 열의 그림만 남긴다.
+ */
 export function matchSchedule(schedule, rows) {
   const result = new Map();
   let cursor = 0;
@@ -118,12 +146,24 @@ export function matchSchedule(schedule, rows) {
     let idx = -1;
     for (let k = cursor; k < rows.length; k++) if (rows[k].min === min) { idx = k; break; }
     if (idx >= 0) {
-      cursor = idx + 1;
       lastByMin.set(min, idx);
+      cursor = idx + 1;
     } else if (lastByMin.has(min)) {
-      idx = lastByMin.get(min); // A/B CAM처럼 같은 시간 줄이 하나뿐인 경우
+      idx = lastByMin.get(min); // A캠 다음에 나오는 같은 시간의 B캠 항목 등
     }
-    if (idx >= 0 && rows[idx].images.length) result.set(i, rows[idx]);
+    if (idx < 0) return;
+    const end = toMin(s.end);
+    const dur = end == null ? 0 : (end - min + 1440) % 1440;
+    const picked = [rows[idx]];
+    for (let k = idx + 1; k < rows.length && dur > 0; k++) {
+      const delta = (rows[k].min - min + 1440) % 1440;
+      if (delta === 0 || delta >= dur) break;
+      picked.push(rows[k]);
+    }
+    const track = String(s.track || '').trim().toUpperCase();
+    const side = /^A\b|^A\s*CAM/.test(track) ? 'A' : /^B\b|^B\s*CAM/.test(track) ? 'B' : null;
+    const images = picked.flatMap((r) => r.images).filter((b) => !side || !b.side || b.side === side);
+    if (images.length) result.set(i, { images });
   });
   return result;
 }

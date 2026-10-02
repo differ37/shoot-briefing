@@ -467,7 +467,7 @@ function openContiViewer(pdf, row, start = 0) {
     $('.cv-next', el).disabled = k === row.images.length - 1;
     if (!urls.has(k)) {
       const w = Math.min(2000, Math.max(window.innerWidth, 600) * Math.min(2, window.devicePixelRatio || 1));
-      urls.set(k, renderRegion(pdf, row.page, row.images[k], w).then((blob) => URL.createObjectURL(blob)));
+      urls.set(k, renderRegion(pdf, row.images[k].page, row.images[k], w).then((blob) => URL.createObjectURL(blob)));
     }
     const want = k;
     const url = await urls.get(k);
@@ -784,7 +784,7 @@ async function renderProject(space, pid, vid) {
         for (const [k, b] of row.images.entries()) {
           const img = new Image();
           img.alt = '';
-          img.src = URL.createObjectURL(await thumb(row.page, b, 96 * dpr));
+          img.src = URL.createObjectURL(await thumb(b.page, b, 96 * dpr));
           box.querySelector(`[data-k="${k}"]`)?.appendChild(img);
         }
       }
