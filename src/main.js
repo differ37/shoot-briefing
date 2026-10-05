@@ -4,7 +4,7 @@ import { avatarHtml, displayName } from './profiles.js';
 import { GitHubStore, LocalStore, PrefixedStore } from './storage.js';
 import { Library, versionKeyFromName } from './library.js';
 import { analyzeTimetable, compareVersions, testKey } from './claude.js';
-import { openPdf, pdfToAnalysisImages, pdfThumbnail, renderPagesInto } from './pdf.js';
+import { makeReducedPdf, openPdf, pdfToAnalysisImages, pdfThumbnail, pickPages, renderPagesInto } from './pdf.js';
 import { installTypeset } from './typeset.js';
 import { extractConti, matchSchedule, renderRegion, thumbRenderer } from './conti.js';
 import { computeMarks } from './diff.js';
@@ -707,6 +707,7 @@ async function renderProject(space, pid, vid) {
   <section class="section">
     <h2 class="section-title">${icon.doc} 원본 타임테이블</h2>
     <div class="card original">
+      ${rec.reduced ? `<p class="muted small">원본이 커서(${Math.round(rec.reduced.originalSize / 1048576)}MB, ${rec.reduced.totalPages}쪽) 분석에 쓴 ${h(rec.reduced.pages.join(', '))}쪽만 저장돼 있어요. 전체 원본은 받은 파일을 보세요.</p>` : ''}
       <div class="row-gap"><button class="btn" id="showPdf">${icon.doc} 원본 페이지 보기</button><button class="btn ghost" id="openPdf">새 탭에서 PDF 열기</button></div>
       <p class="muted small">${h(meta.fileName)}</p>
       <div id="pdfPages" class="pdf-pages"></div>
@@ -762,7 +763,8 @@ async function renderProject(space, pid, vid) {
     btn?.classList.add('busy');
     try {
       const pdf = await openPdf(await (await getPdfBlob()).arrayBuffer());
-      const { rows } = await extractConti(pdf);
+      // 큰 PDF를 줄여 저장한 경우엔 원본에서 미리 뽑아 둔 콘티 위치를 쓴다 (줄인 PDF엔 글자 정보가 없음)
+      const { rows } = rec.conti?.rows ? rec.conti : await extractConti(pdf);
       const found = matchSchedule(a.schedule, rows);
       if (!found.size) { toast('이 타임테이블에서는 콘티 그림을 찾지 못했어요'); contiState = 'done'; return; }
       const dpr = Math.min(2, window.devicePixelRatio || 1);
@@ -1474,7 +1476,36 @@ function progressSheet() {
   };
 }
 
+// GitHub는 100MB 넘는 파일을 거부하고, 휴대폰에서 큰 파일을 base64로 올리면 메모리가 모자라다
+const BIG_PDF = 40 * 1024 * 1024;
+
+// 분석하는 동안 화면이 꺼지면 휴대폰 브라우저가 연결을 끊으므로 화면을 켜 둔다
+let wakeLock = null;
+let wantAwake = false;
+async function keepAwake(on) {
+  wantAwake = on;
+  try {
+    if (on && !wakeLock && navigator.wakeLock) {
+      wakeLock = await navigator.wakeLock.request('screen');
+      wakeLock.addEventListener('release', () => { wakeLock = null; });
+    } else if (!on && wakeLock) {
+      await wakeLock.release();
+      wakeLock = null;
+    }
+  } catch {}
+}
+document.addEventListener('visibilitychange', () => { if (wantAwake && document.visibilityState === 'visible') keepAwake(true); });
+
 async function uploadFiles(files, projectId, space) {
+  keepAwake(true);
+  try {
+    await uploadFilesInner(files, projectId, space);
+  } finally {
+    keepAwake(false);
+  }
+}
+
+async function uploadFilesInner(files, projectId, space) {
   const sheet = progressSheet();
   let lastProject = null;
   const lib = await getLibrary(space).catch((e) => { sheet.title('저장소 연결 실패'); sheet.detail(e.message); return null; });
@@ -1489,13 +1520,27 @@ async function uploadFiles(files, projectId, space) {
     sheet.title('분석 중');
     try {
       sheet.step('read');
-      const buf = await file.arrayBuffer();
-      const pdf = await openPdf(buf);
-      sheet.step('render');
-      const images = await pdfToAnalysisImages(pdf, (t) => sheet.detail(t));
-      const thumb = await pdfThumbnail(pdf);
+      // Uint8Array로 넘겨 복사 없이 연다 (165MB짜리 PPM 자료도 메모리를 두 배로 쓰지 않게)
+      const pdf = await openPdf(new Uint8Array(await file.arrayBuffer()));
+      const { pages, picked, found } = await pickPages(pdf);
+      sheet.step('render', picked ? `${pdf.numPages}쪽 중 ${pages.length}쪽` : '');
+      if (picked) sheet.detail(found ? `촬영 일정이 있는 ${pages.join(', ')}쪽만 분석해요` : `시간표를 찾지 못해 앞 ${pages.length}쪽만 분석해요`);
+      const images = await pdfToAnalysisImages(pdf, (t) => sheet.detail(t), pages);
+      const thumb = await pdfThumbnail(pdf, 720, pages[0]);
+      // 저장소에 올리기엔 너무 큰 PDF → 고른 페이지만 이미지 PDF로 줄이고, 콘티 위치는 원본에서 미리 뽑아 둔다
+      let pdfBlob = file;
+      let extra = {};
+      if (file.size > BIG_PDF) {
+        sheet.detail('원본이 커서 분석한 페이지만 가볍게 저장할 준비 중…');
+        const { rows } = await extractConti(pdf, pages);
+        const at = new Map(pages.map((p, k) => [p, k + 1]));
+        const contiRows = rows.filter((r) => at.has(r.page)).map((r) => ({ ...r, page: at.get(r.page), images: r.images.map((b) => ({ ...b, page: at.get(b.page) })) }));
+        pdfBlob = await makeReducedPdf(pdf, pages, (t) => sheet.detail(t));
+        extra = { conti: { rows: contiRows }, reduced: { pages, totalPages: pdf.numPages, originalSize: file.size } };
+      }
+      pdf.loadingTask?.destroy?.(); // 워커가 들고 있는 원본(최대 수백 MB)을 분석 요청 전에 놓아 준다
       sheet.step('analyze', `이미지 ${images.length}장`);
-      sheet.detail('글씨가 작은 표를 꼼꼼히 읽고 있어요. 보통 1~3분 걸립니다.');
+      sheet.detail('글씨가 작은 표를 꼼꼼히 읽고 있어요. 보통 1~3분 걸려요. 끝날 때까지 이 화면을 켜 두세요.');
       let chars = 0;
       const t0 = Date.now();
       const timer = setInterval(() => sheet.detail(`분석 중… ${Math.round((Date.now() - t0) / 1000)}초${chars ? ` · 결과 ${chars.toLocaleString()}자 작성 중` : ''}`), 1000);
@@ -1506,10 +1551,11 @@ async function uploadFiles(files, projectId, space) {
       sheet.skip('diff');
       const { project } = await lib.addVersion({
         fileName: file.name,
-        pdfBlob: file,
+        pdfBlob,
         thumbBlob: thumb,
         analysis,
         projectId,
+        extra,
         compare: async (prev, next, pl, nl) => (await compareVersions(settings.anthropicKey, { prev, next, prevLabel: pl, nextLabel: nl })).data,
         onStep: (k) => { if (k === 'diff') { $('[data-step="diff"]').className = ''; sheet.detail('이전 버전과 무엇이 달라졌는지 비교 중…'); } sheet.step(k); if (k === 'save') sheet.detail(lib.store.kind === 'github' ? 'GitHub 비공개 저장소에 저장 중…' : '이 기기에 저장 중…'); },
       });

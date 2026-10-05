@@ -24,7 +24,10 @@ npm run build
 
 - `src/main.js` — 라우터·화면 전체(로그인, 홈, 브리핑, 설정, 업로드, 시간 작성 팝업, 옆 메뉴)
 - `src/claude.js` — 분석/버전 비교 프롬프트와 JSON 스키마. 모델 `claude-opus-5-5`, structured output, `fallbacks: 'default'`
-- `src/pdf.js` — PDF → 개요 1장 + 겹치는 확대 타일 이미지(타임테이블 PDF는 텍스트 레이어 한글이 깨져 있어 이미지로 보냄)
+- `src/pdf.js` — PDF → 개요 1장 + 겹치는 확대 타일 이미지(타임테이블 PDF는 텍스트 레이어 한글이 깨져 있어 이미지로 보냄).
+  `pickPages`: 9쪽 이상(PPM 자료 등)이면 시간 글자 3개 이상인 페이지 + 바로 뒤 3쪽(장소·주차 지도)만 분석(최대 12쪽, 못 찾으면 앞 10쪽).
+  `makeReducedPdf`: 40MB(`BIG_PDF`) 넘는 PDF는 고른 페이지만 이미지 PDF(pdf-lib, 원본과 같은 pt 크기)로 줄여 저장 —
+  GitHub 100MB 제한·휴대폰 메모리 때문. 이때 콘티 위치는 원본에서 미리 뽑아 버전 JSON의 `conti.rows`에, 줄인 정보는 `reduced`에 저장.
 - `src/library.js` — 촬영(project) ⊃ 버전 데이터 관리, 버전 순서(파일명 `v0930_01`), 변경 재계산, 장비집 시간(`project.prep`)
 - `src/storage.js` — `GitHubStore`(Contents API) / `LocalStore`(IndexedDB) / `PrefixedStore`(사람별 폴더)
 - `src/vault.js` — 아이디/비밀번호 로그인(서버 없음), 공개 계정 목록
@@ -84,6 +87,8 @@ npm run build
 - 진행 타임라인 콘티 그림 — 줄마다 썸네일, 눌러서 크게 보기, A/B CAM 열 구분. "콘티" 버튼으로 켜고 끔.
 - 모바일 줄바꿈 — 마디 단위 줄바꿈, 제목·주소 한 줄 맞춤, 이동 정보 줄 나눔, 내비 버튼 한 줄.
 - 로그인 후 "확인 중…"에서 멈추던 문제(이미 같은 주소일 때 hashchange 없음) 수정.
+- 165MB PPM 자료(26쪽) 업로드가 끊기던 문제 (2026-10-05) — 관련 쪽만 분석(78장→18장), 원본 복사 제거(Uint8Array로 넘김),
+  분석 중 화면 꺼짐 방지(Wake Lock), 40MB 넘으면 줄인 PDF(165MB→3MB)로 저장.
 
 알려진 한계 / 다음 후보:
 - 콘티 매칭은 텍스트 레이어의 시간 글자와 표 선에 의존 — 형식이 다른 타임테이블에선 그림이 안 나오거나 A/B 구분이 안 될 수 있다.

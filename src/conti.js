@@ -72,9 +72,9 @@ function timeRows(items, vp) {
 }
 
 /** → { rows: [{page, min, y, images:[{x,y,w,h}]}] } (모든 페이지, 순서대로) */
-export async function extractConti(pdf) {
+export async function extractConti(pdf, pages = null) {
   const rows = [];
-  for (let p = 1; p <= pdf.numPages; p++) {
+  for (const p of pages || Array.from({ length: pdf.numPages }, (_, i) => i + 1)) {
     const page = await pdf.getPage(p);
     const vp = page.getViewport({ scale: 1 });
     const [tc, { images, boxes }] = await Promise.all([page.getTextContent(), pageShapes(page, vp)]);

@@ -104,7 +104,7 @@ export class Library {
    * 새 버전 저장.
    * compare(prevAnalysis, nextAnalysis, prevLabel, nextLabel) → {summary, changes}
    */
-  async addVersion({ fileName, pdfBlob, thumbBlob, analysis, projectId, compare, onStep }) {
+  async addVersion({ fileName, pdfBlob, thumbBlob, analysis, projectId, compare, onStep, extra = {} }) {
     await this.load(); // 다른 기기에서 올린 내용과 충돌하지 않도록 최신 목록부터
     let project = projectId ? this.project(projectId) : this.guessProject(fileName, analysis);
     const prod = analysis.production || {};
@@ -148,7 +148,7 @@ export class Library {
     const prevMeta = ordered[pos - 1];
     const nextMeta = ordered[pos + 1];
 
-    const record = { ...meta, analysis, changes: null };
+    const record = { ...meta, analysis, changes: null, ...extra };
     if (prevMeta) {
       onStep?.('diff');
       const prev = await this.getVersion(project.id, prevMeta.id);
