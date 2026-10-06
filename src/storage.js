@@ -158,3 +158,39 @@ export class PrefixedStore {
   putBlob(path, blob, message) { return this.store.putBlob(this.prefix + path, blob, message); }
   remove(path, message) { return this.store.remove(this.prefix + path, message); }
 }
+
+/**
+ * 큰 원본 PDF 보관함 (이 기기 안, IndexedDB).
+ * 저장소에는 줄인 PDF만 올리고(GitHub 100MB 제한), 원본은 올린 기기나 원본을 골라 준 기기에만 둔다.
+ * 키: "<공간>/<촬영 id>/<버전 id>"
+ */
+let originalsDb = null;
+function openOriginals() {
+  originalsDb ||= new Promise((resolve, reject) => {
+    const r = indexedDB.open('shoot-briefing-originals', 1);
+    r.onupgradeneeded = () => r.result.createObjectStore('files');
+    r.onsuccess = () => resolve(r.result);
+    r.onerror = () => reject(r.error);
+  });
+  return originalsDb;
+}
+async function originalsTx(mode, fn) {
+  const db = await openOriginals();
+  return new Promise((resolve, reject) => {
+    const t = db.transaction('files', mode);
+    const req = fn(t.objectStore('files'));
+    t.oncomplete = () => resolve(req?.result);
+    t.onerror = () => reject(t.error);
+  });
+}
+export const originals = {
+  async get(key) { try { return (await originalsTx('readonly', (s) => s.get(key))) ?? null; } catch { return null; } },
+  async put(key, blob) {
+    navigator.storage?.persist?.().catch(() => {}); // 브라우저가 공간이 모자랄 때 지우지 않도록 요청
+    // File을 그대로 넣으면 원본 파일 참조만 남는 브라우저가 있어 내용을 Blob으로 복사해 둔다
+    const copy = new Blob([await blob.arrayBuffer()], { type: 'application/pdf' });
+    return originalsTx('readwrite', (s) => s.put(copy, key));
+  },
+  remove(key) { return originalsTx('readwrite', (s) => s.delete(key)).catch(() => {}); },
+  clear() { return originalsTx('readwrite', (s) => s.clear()).catch(() => {}); },
+};

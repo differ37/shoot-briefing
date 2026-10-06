@@ -28,6 +28,9 @@ npm run build
   `pickPages`: 9쪽 이상(PPM 자료 등)이면 시간 글자 3개 이상인 페이지 + 바로 뒤 3쪽(장소·주차 지도)만 분석(최대 12쪽, 못 찾으면 앞 10쪽).
   `makeReducedPdf`: 40MB(`BIG_PDF`) 넘는 PDF는 고른 페이지만 이미지 PDF(pdf-lib, 원본과 같은 pt 크기)로 줄여 저장 —
   GitHub 100MB 제한·휴대폰 메모리 때문. 이때 콘티 위치는 원본에서 미리 뽑아 버전 JSON의 `conti.rows`에, 줄인 정보는 `reduced`에 저장.
+  원본 자체는 `storage.js`의 `originals`(IndexedDB `shoot-briefing-originals`, 키 `<공간>/<pid>/<vid>`)에 올린 기기에만 보관 →
+  원본 칸 "원본 PDF 열기(전체)". 없는 기기는 "원본 파일 선택"으로 받은 파일을 골라 보관. 로그아웃·버전 삭제 시 지움.
+  (GitHub Releases는 다운로드 리다이렉트·업로드가 CORS를 막아 브라우저에서 못 씀 — 2026-10-06 확인)
 - `src/library.js` — 촬영(project) ⊃ 버전 데이터 관리, 버전 순서(파일명 `v0930_01`), 변경 재계산.
   내 시간 기록 `project.log=[{id,label,time}]`(예전 `project.prep` 장비집 집합/출발은 `logOf()`가 기록으로 바꿔 보여주고 저장 시 log로 옮김),
   업무 공유에 쓴 값 `project.share={title,date,route,start,end,fee}`

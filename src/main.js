@@ -1,7 +1,7 @@
 import './styles.css';
 import { icon } from './icons.js';
 import { avatarHtml, displayName } from './profiles.js';
-import { GitHubStore, LocalStore, PrefixedStore } from './storage.js';
+import { GitHubStore, LocalStore, PrefixedStore, originals } from './storage.js';
 import { Library, versionKeyFromName } from './library.js';
 import { analyzeTimetable, compareVersions, testKey } from './claude.js';
 import { makeReducedPdf, openPdf, pdfToAnalysisImages, pdfThumbnail, pickPages, renderPagesInto } from './pdf.js';
@@ -710,8 +710,13 @@ async function renderProject(space, pid, vid) {
   <section class="section" id="sec-orig">
     <h2 class="section-title">${icon.doc} 원본 타임테이블</h2>
     <div class="card original">
-      ${rec.reduced ? `<p class="muted small">원본이 커서(${Math.round(rec.reduced.originalSize / 1048576)}MB, ${rec.reduced.totalPages}쪽) 분석에 쓴 ${h(rec.reduced.pages.join(', '))}쪽만 저장돼 있어요. 전체 원본은 받은 파일을 보세요.</p>` : ''}
-      <div class="row-gap"><button class="btn" id="showPdf">${icon.doc} 원본 페이지 보기</button><button class="btn ghost" id="openPdf">새 탭에서 PDF 열기</button></div>
+      ${rec.reduced ? `
+      <div class="orig-full" id="origFull">
+        <p class="muted small">원본이 커서(${Math.round(rec.reduced.originalSize / 1048576)}MB, ${rec.reduced.totalPages}쪽) 저장소에는 분석한 ${h(rec.reduced.pages.join(', '))}쪽만 올라가 있어요.</p>
+        <div class="row-gap" id="origActions"><span class="muted small">원본 확인 중…</span></div>
+        <input type="file" accept="application/pdf,.pdf" id="origPick" hidden>
+      </div>` : ''}
+      <div class="row-gap"><button class="btn ${rec.reduced ? 'ghost' : ''}" id="showPdf">${icon.doc} ${rec.reduced ? '분석한 페이지 보기' : '원본 페이지 보기'}</button><button class="btn ghost" id="openPdf">새 탭에서 PDF 열기</button></div>
       <p class="muted small">${h(meta.fileName)}</p>
       <div id="pdfPages" class="pdf-pages"></div>
     </div>
@@ -857,6 +862,35 @@ async function renderProject(space, pid, vid) {
       e.currentTarget.innerHTML = `${icon.doc} 원본 페이지 보기`;
     }
   });
+  // 큰 원본: 이 기기에 보관돼 있으면 열기, 없으면 받은 파일을 골라 보관
+  if (rec.reduced) {
+    const key = `${space}/${pid}/${meta.id}`;
+    const actions = $('#origActions');
+    const showState = async () => {
+      const has = await originals.get(key);
+      actions.innerHTML = has
+        ? `<button class="btn" id="origOpen">${icon.doc} 원본 PDF 열기 (${rec.reduced.totalPages}쪽 전체)</button>`
+        : `<button class="btn" id="origChoose">${icon.upload} 원본 파일 선택</button><span class="muted small">이 기기엔 원본이 없어요. 받은 원본 파일을 한 번 고르면 이 기기에 보관돼요.</span>`;
+      $('#origOpen')?.addEventListener('click', async () => {
+        const w = window.open('', '_blank'); // 팝업 차단을 피하려고 누른 순간 먼저 연다
+        const blob = await originals.get(key);
+        if (!blob) { w?.close(); toast('원본을 찾지 못했어요'); return showState(); }
+        const url = URL.createObjectURL(blob);
+        if (w) w.location.href = url; else location.href = url;
+      });
+      $('#origChoose')?.addEventListener('click', () => $('#origPick').click());
+    };
+    $('#origPick').addEventListener('change', async (e) => {
+      const f = e.target.files[0];
+      e.target.value = '';
+      if (!f) return;
+      if (Math.abs(f.size - rec.reduced.originalSize) > 1024) toast('올렸던 원본과 크기가 달라요. 같은 파일인지 확인하세요');
+      actions.innerHTML = '<span class="muted small">이 기기에 보관하는 중…</span>';
+      try { await originals.put(key, f); toast('원본을 이 기기에 보관했어요'); } catch { toast('보관하지 못했어요 (기기 저장 공간을 확인하세요)'); }
+      showState();
+    });
+    showState();
+  }
   $('#openPdf').addEventListener('click', async () => {
     const w = window.open('', '_blank');
     const blob = await getPdfBlob();
@@ -872,6 +906,7 @@ async function renderProject(space, pid, vid) {
     }
     b.disabled = true;
     await lib.deleteVersion(pid, b.dataset.del);
+    originals.remove(`${space}/${pid}/${b.dataset.del}`);
     toast('버전을 삭제했어요');
     if (lib.project(pid)) {
       if (b.dataset.del === meta.id) location.hash = L(space, pid); else route();
@@ -1351,6 +1386,7 @@ document.addEventListener('click', (e) => { if (e.target.closest('[data-action="
 // ---------------------------------------------------------------- 설정
 function logout() {
   try { localStorage.removeItem(SETTINGS_KEY); localStorage.removeItem(SOURCE_KEY); } catch {}
+  originals.clear(); // 이 기기에 보관한 큰 원본도 지운다
   settings = loadSettings();
   libraries.clear();
   accounts = null;
@@ -1729,7 +1765,7 @@ async function uploadFilesInner(files, projectId, space) {
         ({ data: analysis } = await analyzeTimetable(settings.anthropicKey, { images, fileName: file.name, onText: (d) => { chars += d.length; } }));
       } finally { clearInterval(timer); }
       sheet.skip('diff');
-      const { project } = await lib.addVersion({
+      const { project, meta: savedMeta } = await lib.addVersion({
         fileName: file.name,
         pdfBlob,
         thumbBlob: thumb,
@@ -1739,6 +1775,8 @@ async function uploadFilesInner(files, projectId, space) {
         compare: async (prev, next, pl, nl) => (await compareVersions(settings.anthropicKey, { prev, next, prevLabel: pl, nextLabel: nl })).data,
         onStep: (k) => { if (k === 'diff') { $('[data-step="diff"]').className = ''; sheet.detail('이전 버전과 무엇이 달라졌는지 비교 중…'); } sheet.step(k); if (k === 'save') sheet.detail(lib.store.kind === 'github' ? 'GitHub 비공개 저장소에 저장 중…' : '이 기기에 저장 중…'); },
       });
+      // 줄여서 저장한 경우 원본은 이 기기에 보관해 '원본 PDF 열기'로 볼 수 있게
+      if (extra.reduced) await originals.put(`${space}/${project.id}/${savedMeta.id}`, file).catch((err) => console.warn('원본 보관 실패', err));
       lastProject = project;
     } catch (e) {
       console.error(e);
