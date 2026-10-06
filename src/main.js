@@ -9,7 +9,7 @@ import { installTypeset } from './typeset.js';
 import { extractConti, matchSchedule, renderRegion, thumbRenderer } from './conti.js';
 import { computeMarks } from './diff.js';
 import { openNaver, openKakao, copyText } from './nav.js';
-import { buildQuote, defaultContent, downloadBlob, finalMessage, hasSavedProfile, hasSavedSource, loadProfile, loadSource, prepareSourceImage, quoteFileName, saveProfile, saveSource, sourceDataUrl, sourceFile, DEFAULT_ITEM, MAX_DAYS } from './quote.js';
+import { buildQuote, cityOf, defaultContent, downloadBlob, finalMessage, hasSavedProfile, hasSavedSource, loadProfile, loadSource, prepareSourceImage, quoteFileName, saveProfile, saveSource, sourceDataUrl, sourceFile, DEFAULT_ITEM, MAX_DAYS } from './quote.js';
 import { appRepo, fetchAccounts, login, normId, passwordProblem, publishAccounts, publishUser, removeUser } from './vault.js';
 
 // ---------------------------------------------------------------- 설정
@@ -149,16 +149,19 @@ const titleLines = (t) => {
   return `<strong>${h(first)}</strong>${rest.map((r) => `<span class="sub">${h(r)}</span>`).join('')}`;
 };
 
-// 장비집 집합 → 장비집 출발 → 촬영팀 도착
-const prepChain = (prep, callTime, cls = '') => {
-  if (!prep?.gather && !prep?.depart) return '';
-  const steps = [
-    ['장비집 집합', prep.gather],
-    ['장비집 출발', prep.depart],
-    ['촬영팀 도착', callTime || '—'],
-  ].filter(([, t]) => t);
-  return `<ol class="chain ${cls}">${steps.map(([label, t], i) => `<li class="${i === steps.length - 1 ? 'arrive' : ''}"><span>${label}</span><b>${h(t)}</b></li>`).join('')}</ol>`;
+// 내 시간 기록. 예전 방식(project.prep = 장비집 집합/출발)은 기록 두 줄로 바꿔 보여준다
+const logOf = (project) => project.log || [
+  ...(project.prep?.gather ? [{ id: 'g', label: '장비집 집합', time: project.prep.gather }] : []),
+  ...(project.prep?.depart ? [{ id: 'd', label: '장비집 출발', time: project.prep.depart }] : []),
+];
+// 촬영팀 도착 전까지의 기록 → 촬영팀 도착 (홈·도착 카드용 요약)
+const logChain = (entries, callTime, cls = '') => {
+  const before = entries.filter((e) => e.time && (!callTime || !/^\d{1,2}:\d{2}$/.test(callTime) || e.time <= callTime)).slice(-3);
+  if (!before.length) return '';
+  const steps = [...before.map((e) => [e.label, e.time]), ['촬영팀 도착', callTime || '—']];
+  return `<ol class="chain ${cls}">${steps.map(([label, t], i) => `<li class="${i === steps.length - 1 ? 'arrive' : ''}"><span>${h(label)}</span><b>${h(t)}</b></li>`).join('')}</ol>`;
 };
+const firstLog = (p) => logOf(p)[0];
 
 const isPlaceholderPhone = (p) => !p || /0000-?0000/.test(p);
 const telHref = (p) => 'tel:' + String(p).replace(/[^\d+]/g, '');
@@ -371,7 +374,7 @@ async function renderHome(space) {
             <span class="call-time">${h(a.my_call?.time || '—')}</span>
             <span class="call-place">${icon.pin}${h(a.my_call?.location_name || '')}</span>
           </div>
-          ${prepChain(next.prep, a.my_call?.time, 'on-dark')}
+          ${logChain(logOf(next), a.my_call?.time, 'on-dark')}
           ${a.headline ? flow(a.headline, 'on-dark') : ''}
           ${latest.highChangeCount ? `<p class="hero-alert">${icon.alert} 최신 ${h(latest.label)} · 중요한 변경 ${latest.highChangeCount}건</p>` : ''}
           <span class="call-go">브리핑 보기 ${icon.chevron}</span>
@@ -398,7 +401,7 @@ async function renderHome(space) {
       <div class="sr-body">
         <strong>${h(p.title)}</strong>
         <span class="sr-sub">${h(p.production || p.shootType || '')}</span>
-        <span class="sr-call" data-call>${p.callTime ? `${icon.clock}${p.prep?.gather ? `${h(p.prep.gather)} 집합 · ` : ''}${h(p.callTime)} 도착 · ${h(p.callPlace || '')}` : ''}</span>
+        <span class="sr-call" data-call>${p.callTime ? `${icon.clock}${firstLog(p) ? `${h(firstLog(p).time)} ${h(firstLog(p).label)} · ` : ''}${h(p.callTime)} 도착 · ${h(p.callPlace || '')}` : ''}</span>
       </div>
       <div class="sr-side">
         <span class="sr-dday">${h(dday(p.date))}</span>
@@ -445,7 +448,7 @@ async function renderHome(space) {
     lib.getVersion(p.id, lib.latest(p).id).then((rec) => {
       const mc = rec?.analysis?.my_call;
       const el = $(`.shoot-row[data-pid="${CSS.escape(p.id)}"] [data-call]`);
-      if (mc?.time && el) el.innerHTML = `${icon.clock}${p.prep?.gather ? `${h(p.prep.gather)} 집합 · ` : ''}${h(mc.time)} 도착 · ${h(mc.location_name || '')}`;
+      if (mc?.time && el) el.innerHTML = `${icon.clock}${firstLog(p) ? `${h(firstLog(p).time)} ${h(firstLog(p).label)} · ` : ''}${h(mc.time)} 도착 · ${h(mc.location_name || '')}`;
     }).catch(() => {});
   }
 }
@@ -508,7 +511,7 @@ async function renderProject(space, pid, vid) {
     <div class="hero-text">
       <p class="eyebrow">${h([prod.production_company, prod.shoot_type].filter(Boolean).join(' · ') || 'CALL SHEET')}</p>
       <h1>${h(prod.project_title || project.title)}</h1>
-      <p class="lead">${h(prettyDate(prod.shoot_date || project.date, prod.weekday))} <span class="dday">${h(dday(prod.shoot_date || project.date))}</span>${canEdit(space) ? `<button type="button" class="mini-btn" id="prepBtn">${icon.clock}시간 작성</button>` : ''}</p>
+      <p class="lead">${h(prettyDate(prod.shoot_date || project.date, prod.weekday))} <span class="dday">${h(dday(prod.shoot_date || project.date))}</span>${canEdit(space) ? `<button type="button" class="mini-btn" data-log-add>${icon.clock}시간 기록</button>` : ''}</p>
       <div class="ver-line">
         <span class="pill ${isLatest ? 'latest' : 'old'}">${isLatest ? '최신' : '이전 버전'} · ${h(meta.label)}</span>
         ${rec.changes ? `<span class="pill ${rec.changes.changes.length ? 'warn' : ''}">${h(rec.changes.againstLabel)} 대비 변경 ${rec.changes.changes.length}건</span>` : '<span class="pill">첫 버전</span>'}
@@ -533,7 +536,7 @@ async function renderProject(space, pid, vid) {
   const changes = rec.changes;
   const order = { high: 0, medium: 1, low: 2 };
   const changesHtml = changes ? `
-  <section class="section">
+  <section class="section" id="sec-changes">
     <div class="card changes ${changes.changes.length ? '' : 'none'}">
       <div class="card-head">${icon.swap}<h2>${h(changes.againstLabel)} → ${h(meta.label)} 변경사항</h2></div>
       ${para(changes.summary, 'changes-summary')}
@@ -566,10 +569,10 @@ async function renderProject(space, pid, vid) {
   const navTargets = [{ name: mc.location_name || myLoc.name, address: myAddr }, ...locs];
 
   const myCall = `
-  <section class="section">
+  <section class="section" id="sec-call">
     <div class="call-card">
       <div class="call-main">
-        ${prepChain(project.prep, mc.time, 'on-dark')}
+        ${logChain(logOf(project), mc.time, 'on-dark')}
         <span class="call-label">${icon.camera} 촬영팀 도착</span>
         <div class="call-time-xl">${h(mc.time || '—')}${marks.myCall.time ? `<span class="badge chg">변경</span><span class="before">${h(marks.myCall.time)}</span>` : ''}</div>
         <div class="call-where">
@@ -586,7 +589,7 @@ async function renderProject(space, pid, vid) {
       <div class="stat"><span>종료 예정</span><strong>${h(a.wrap_time || '—')}</strong>${marks.wrap ? `<span class="badge chg">변경</span><span class="before">${h(marks.wrap)}</span>` : ''}</div>
       <div class="stat"><span>담당자</span><strong>${(a.contacts || []).length}명</strong></div>
     </div>
-    ${a.briefing ? `<div class="card briefing"><div class="card-head">${icon.sparkle}<h2>브리핑</h2></div>${para(a.briefing)}</div>` : ''}
+    ${a.briefing ? `<div class="card briefing" id="sec-brief"><div class="card-head">${icon.sparkle}<h2>브리핑</h2></div>${para(a.briefing)}</div>` : ''}
   </section>`;
 
   // --- 동선 (촬영지 + 이동)
@@ -629,7 +632,7 @@ async function renderProject(space, pid, vid) {
     routeItems += `<li class="move"><span class="move-line"></span><div>${icon.truck}<strong>${h(m.time)}</strong> 이동 ${badge(marks.moves.get(mi))}${moveBody(m)}</div></li>`;
   });
   const routeHtml = `
-  <section class="section">
+  <section class="section" id="sec-route">
     <h2 class="section-title">${icon.pin} 촬영지 · 동선</h2>
     <ol class="route">${routeItems || '<li class="empty-line">촬영지 정보가 없어요.</li>'}</ol>
   </section>`;
@@ -637,7 +640,7 @@ async function renderProject(space, pid, vid) {
   // --- 콜타임
   const calls = a.call_times || [];
   const callsHtml = calls.length ? `
-  <section class="section">
+  <section class="section" id="sec-calls">
     <h2 class="section-title">${icon.users} 팀별 도착 시간</h2>
     <div class="calls">
       ${calls.map((c, i) => `
@@ -654,7 +657,7 @@ async function renderProject(space, pid, vid) {
   const tracks = [...new Set(sched.map((s) => s.track).filter((t) => t && t !== '전체'))];
   const kindClass = { 촬영: 'k-shoot', 포토: 'k-shoot', 세팅: 'k-set', 이동: 'k-move', 식사: 'k-meal', 휴식: 'k-meal', 교육: 'k-info', 종료: 'k-end', 기타: 'k-etc' };
   const schedHtml = sched.length ? `
-  <section class="section">
+  <section class="section" id="sec-sched">
     <div class="section-head">
       <h2 class="section-title">${icon.clock} 진행 타임라인</h2>
       <button class="conti-toggle" id="contiToggle" aria-pressed="false">${icon.camera}<span>콘티</span></button>
@@ -679,7 +682,7 @@ async function renderProject(space, pid, vid) {
   const lv = { critical: [icon.alert, '필수'], important: [icon.star, '중요'], info: [icon.info, '참고'] };
   const checks = [...(a.checks || [])].map((c, i) => ({ ...c, i })).sort((x, y) => ['critical', 'important', 'info'].indexOf(x.level) - ['critical', 'important', 'info'].indexOf(y.level));
   const checksHtml = checks.length ? `
-  <section class="section">
+  <section class="section" id="sec-checks">
     <h2 class="section-title">${icon.flag} 체크사항</h2>
     <ul class="checks">
       ${checks.map((c) => `<li class="lv-${c.level}">${lv[c.level]?.[0] || ''}<span class="lv">${lv[c.level]?.[1] || ''}</span>${para(c.text, 'check-text')}${badge(marks.checks.get(c.i))}</li>`).join('')}
@@ -689,7 +692,7 @@ async function renderProject(space, pid, vid) {
   // --- 연락처
   const contacts = a.contacts || [];
   const contactsHtml = `
-  <section class="section">
+  <section class="section" id="sec-contacts">
     <h2 class="section-title">${icon.phone} 담당자 연락처</h2>
     ${contacts.length ? `<div class="contacts">
       ${contacts.map((c, i) => `
@@ -704,7 +707,7 @@ async function renderProject(space, pid, vid) {
 
   // --- 원본 + 히스토리
   const historyHtml = `
-  <section class="section">
+  <section class="section" id="sec-orig">
     <h2 class="section-title">${icon.doc} 원본 타임테이블</h2>
     <div class="card original">
       ${rec.reduced ? `<p class="muted small">원본이 커서(${Math.round(rec.reduced.originalSize / 1048576)}MB, ${rec.reduced.totalPages}쪽) 분석에 쓴 ${h(rec.reduced.pages.join(', '))}쪽만 저장돼 있어요. 전체 원본은 받은 파일을 보세요.</p>` : ''}
@@ -731,9 +734,36 @@ async function renderProject(space, pid, vid) {
     </ol>
   </section>`;
 
-  app.innerHTML = shell(hero + switcher + changesHtml + myCall + routeHtml + callsHtml + schedHtml + checksHtml + contactsHtml + historyHtml);
+  // --- 내 시간 기록 + 업무 공유
+  const entries = logOf(project);
+  const logHtml = canEdit(space) || entries.length ? `
+  <section class="section" id="sec-log">
+    <div class="card log-card">
+      <div class="card-head">${icon.clock}<h2>내 시간 기록</h2></div>
+      ${entries.length ? `<ol class="log-list">${entries.map((e, k) => `
+        <li><button type="button" ${canEdit(space) ? `data-log-edit="${k}"` : 'disabled'}><b>${h(e.time)}</b><span>${h(e.label)}</span>${canEdit(space) ? icon.chevron : ''}</button></li>`).join('')}</ol>`
+        : '<p class="muted small">장소를 옮길 때마다 기록을 남겨 두세요. 예: 장비집 집합, 현장 도착, 현장 종료</p>'}
+      <div class="log-actions">
+        ${canEdit(space) ? `<button type="button" class="btn" data-log-add>+ 기록 추가</button>` : ''}
+        <button type="button" class="btn ghost" data-share-work>${icon.copy} 업무 공유</button>
+      </div>
+    </div>
+  </section>` : '';
+
+  // --- 바로가기 (있는 칸만)
+  const jumps = [
+    ['sec-log', '기록', logHtml], ['sec-changes', '변경', changesHtml], ['sec-call', '도착', myCall], ['sec-brief', '브리핑', a.briefing],
+    ['sec-route', '동선', routeHtml], ['sec-calls', '팀별', callsHtml], ['sec-sched', '진행표', schedHtml], ['sec-checks', '체크', checksHtml],
+    ['sec-contacts', '연락처', contactsHtml], ['sec-orig', '원본', historyHtml],
+  ].filter(([, , has]) => has);
+  const jumpBar = `<nav class="jump-bar" aria-label="바로가기"><div class="jump-scroll">${jumps.map(([id, label]) => `<a href="#${id}" data-jump="${id}">${label}</a>`).join('')}</div></nav>`;
+
+  app.innerHTML = shell(hero + switcher + jumpBar + logHtml + changesHtml + myCall + routeHtml + callsHtml + schedHtml + checksHtml + contactsHtml + historyHtml);
+  bindJumpBar();
   hydrateThumbs(lib);
-  $('#prepBtn')?.addEventListener('click', () => openPrepModal(lib, project, mc.time));
+  $$('[data-log-add]').forEach((b) => b.addEventListener('click', () => openLogSheet(lib, project, null)));
+  $$('[data-log-edit]').forEach((b) => b.addEventListener('click', () => openLogSheet(lib, project, Number(b.dataset.logEdit))));
+  $('[data-share-work]')?.addEventListener('click', () => openShareSheet(lib, project, a, canEdit(space)));
 
   // 이벤트
   $$('[data-nav]').forEach((b) => b.addEventListener('click', () => {
@@ -850,20 +880,70 @@ async function renderProject(space, pid, vid) {
 }
 
 // ---------------------------------------------------------------- 시간 작성 팝업
-function openPrepModal(lib, project, callTime) {
-  const prep = project.prep || {};
+// 바로가기 바: 누르면 그 칸으로, 스크롤하면 지금 보는 칸 표시
+function bindJumpBar() {
+  const bar = $('.jump-bar');
+  if (!bar) return;
+  const links = $$('[data-jump]', bar);
+  bar.addEventListener('click', (e) => {
+    const a = e.target.closest('[data-jump]');
+    if (!a) return;
+    e.preventDefault(); // 주소(#/s/...)는 라우터가 쓰므로 해시를 바꾸지 않는다
+    const target = document.getElementById(a.dataset.jump);
+    if (!target) return;
+    const y0 = window.scrollY;
+    target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    // 부드러운 스크롤이 안 먹는 환경(절전·접근성 설정 등)이면 바로 이동
+    setTimeout(() => { if (Math.abs(window.scrollY - y0) < 2) target.scrollIntoView({ block: 'start' }); }, 350);
+  });
+  const setOn = (id) => {
+    links.forEach((l) => l.classList.toggle('on', l.dataset.jump === id));
+    const on = links.find((l) => l.dataset.jump === id);
+    if (on) {
+      const sc = $('.jump-scroll', bar);
+      sc.scrollTo({ left: on.offsetLeft - sc.clientWidth / 2 + on.offsetWidth / 2, behavior: 'smooth' });
+    }
+  };
+  const onScroll = () => {
+    const top = bar.getBoundingClientRect().bottom + 24;
+    let cur = links[0]?.dataset.jump;
+    for (const l of links) {
+      const el = document.getElementById(l.dataset.jump);
+      if (el && el.getBoundingClientRect().top <= top) cur = l.dataset.jump;
+    }
+    if (bar.dataset.on !== cur) { bar.dataset.on = cur; setOn(cur); }
+  };
+  let raf = 0;
+  const handler = () => { if (!raf) raf = requestAnimationFrame(() => { raf = 0; if (!bar.isConnected) return window.removeEventListener('scroll', handler); onScroll(); }); };
+  window.addEventListener('scroll', handler, { passive: true });
+  onScroll();
+}
+
+const LOG_PRESETS = ['사무실 집합', '장비집 집합', '장비집 출발', '현장 도착', '현장 출발', '현장 종료', '장비집 도착', '업무 종료'];
+const nowHM = () => new Date().toTimeString().slice(0, 5);
+
+// 시간 기록 추가/수정 (index가 null이면 새로 추가)
+function openLogSheet(lib, project, index) {
+  const entries = logOf(project).map((e) => ({ ...e }));
+  const cur = index == null ? null : entries[index];
+  // 같은 이름이 이미 있으면 번호를 붙여 제안 ("현장 도착" → "현장2 도착")
+  const suggest = (base) => {
+    const [place, act] = base.split(' ');
+    const re = new RegExp(`^${place}\\d*\\s*${act}$`);
+    const n = entries.filter((e) => re.test(e.label)).length;
+    return n ? `${place}${n + 1} ${act}` : base;
+  };
   const el = document.createElement('div');
   el.className = 'sheet-backdrop';
   el.innerHTML = `
-  <form class="sheet prep-sheet" autocomplete="off">
+  <form class="sheet log-sheet form" autocomplete="off">
     <p class="eyebrow">${h(project.title)}</p>
-    <h2>시간 작성</h2>
-    <label>${icon.users}<span>장비집 집합</span><input type="time" name="gather" value="${h(prep.gather || '')}"></label>
-    <label>${icon.truck}<span>장비집 출발</span><input type="time" name="depart" value="${h(prep.depart || '')}"></label>
-    <div class="prep-arrive">${icon.camera}<span>촬영팀 도착</span><b>${h(callTime || '—')}</b></div>
-    <p class="muted small prep-hint">타임테이블 기준 도착 시간이에요. 새 버전이 올라와도 기록한 시간은 그대로 유지돼요.</p>
+    <h2>${cur ? '기록 고치기' : '시간 기록'}</h2>
+    <div class="log-presets">${LOG_PRESETS.map((t) => `<button type="button" data-preset="${h(t)}">${h(suggest(t))}</button>`).join('')}</div>
+    <label>무엇을 했나요<input name="label" value="${h(cur?.label || '')}" placeholder="예: 장비집2 집합" maxlength="30"></label>
+    <label>시간<input type="time" name="time" value="${h(cur?.time || nowHM())}" required></label>
     <div class="sheet-actions">
-      ${prep.gather || prep.depart ? '<button type="button" class="btn ghost danger" data-clear>지우기</button>' : ''}
+      ${cur ? '<button type="button" class="btn ghost danger" data-del>지우기</button>' : ''}
       <span class="spacer"></span>
       <button type="button" class="btn ghost" data-cancel>취소</button>
       <button type="submit" class="btn">저장</button>
@@ -873,28 +953,128 @@ function openPrepModal(lib, project, callTime) {
   requestAnimationFrame(() => el.classList.add('show'));
   const close = () => { el.classList.remove('show'); setTimeout(() => el.remove(), 300); };
   const form = $('form', el);
-  $('input[name=gather]', form).focus();
-  el.addEventListener('click', (e) => { if (e.target === el) close(); });
-  $('[data-cancel]', form).addEventListener('click', close);
-
-  const save = async (values) => {
+  const label = $('input[name=label]', form);
+  el.addEventListener('click', (e) => {
+    if (e.target === el || e.target.closest('[data-cancel]')) return close();
+    const b = e.target.closest('[data-preset]');
+    if (b) { label.value = b.textContent; label.focus(); }
+  });
+  const save = async (next, msg) => {
     $$('button', form).forEach((b) => (b.disabled = true));
     try {
-      await lib.setPrep(project.id, values);
+      await lib.setLog(project.id, next);
       close();
-      toast(values.gather || values.depart ? '시간을 저장했어요' : '시간을 지웠어요');
+      toast(msg);
       route();
     } catch (err) {
       toast(err.status === 403 || err.status === 404 ? '저장 권한이 없어요' : err.message);
       $$('button', form).forEach((b) => (b.disabled = false));
     }
   };
-  $('[data-clear]', form)?.addEventListener('click', () => save({ gather: '', depart: '' }));
+  $('[data-del]', form)?.addEventListener('click', () => save(entries.filter((_, k) => k !== index), '기록을 지웠어요'));
   form.addEventListener('submit', (e) => {
     e.preventDefault();
-    const { gather, depart } = Object.fromEntries(new FormData(form));
-    if (!gather && !depart) return toast('시간을 하나 이상 입력하세요');
-    save({ gather, depart });
+    const v = Object.fromEntries(new FormData(form));
+    if (!v.label.trim()) return toast('무엇을 했는지 적어 주세요');
+    const item = { id: cur?.id || Date.now().toString(36), label: v.label.trim(), time: v.time };
+    if (cur) entries[index] = item; else entries.push(item);
+    save(entries, '기록했어요');
+  });
+}
+
+// 업무 공유 (카톡용): 제목 / 빈 줄 / 날짜 요일 / 이동 경로 / 집합~종료 / 견적
+const CITY_ALIAS_KEY = 'shoot-briefing.cityAlias';
+const toMin = (t) => { const m = String(t || '').match(/(\d{1,2}):(\d{2})/); return m ? Number(m[1]) * 60 + Number(m[2]) : null; };
+function openShareSheet(lib, project, a, editable) {
+  const prev = project.share || {};
+  const entries = logOf(project);
+  const findLog = (re, last = false) => { const list = entries.filter((e) => re.test(e.label)); return (last ? list[list.length - 1] : list[0])?.time || ''; };
+  // 주소의 시·군 이름 → 내가 고쳐 쓴 이름 (예: 고양 → 일산)을 기억해 다음부터 자동 적용
+  let alias = {};
+  try { alias = JSON.parse(localStorage.getItem(CITY_ALIAS_KEY) || '{}'); } catch {}
+  const cities = (a.locations || []).map((l) => cityOf(l.address) || '').filter(Boolean).filter((c, i, arr) => c !== arr[i - 1]);
+  const routeAuto = cities.map((c) => alias[c] || c).join('>');
+  const wrap = String(a.wrap_time || '').match(/\d{1,2}:\d{2}/)?.[0] || '';
+  let lastPrice = '';
+  try { lastPrice = localStorage.getItem(LAST_PRICE_KEY) || ''; } catch {}
+  const [, mm, dd] = (project.date || '').split('-').map(Number);
+  const v0 = {
+    title: prev.title || a.production?.project_title || project.title,
+    date: prev.date || (project.date ? `${mm}/${dd} ${project.weekday || '일월화수목금토'[new Date(project.date + 'T00:00:00').getDay()]}` : ''),
+    route: prev.route || routeAuto,
+    start: prev.start || findLog(/현장\d*\s*(집합|도착)/) || a.my_call?.time || '',
+    end: prev.end || findLog(/(현장\d*|촬영)\s*종료/, true) || wrap,
+    fee: prev.fee || lastPrice,
+  };
+  const el = document.createElement('div');
+  el.className = 'sheet-backdrop';
+  el.innerHTML = `
+  <form class="sheet share-sheet form" autocomplete="off">
+    <p class="eyebrow">업무 공유</p>
+    <h2>업무 시간 보내기</h2>
+    <div class="share-times">
+      <label>현장 집합<input type="time" name="start" value="${h(v0.start)}"></label>
+      <label>현장 종료<input type="time" name="end" value="${h(v0.end)}"></label>
+    </div>
+    <label class="q-price">견적<span class="won-input"><input name="fee" inputmode="numeric" value="${h(v0.fee ? won(v0.fee) : '')}" placeholder="예: 550,000"><em>원</em></span></label>
+    <details class="q-more">
+      <summary>제목 · 날짜 · 이동 경로 ${icon.chevron}</summary>
+      <label>제목<input name="title" value="${h(v0.title)}"></label>
+      <label>날짜<input name="date" value="${h(v0.date)}"></label>
+      <label>이동 경로 <span class="opt">">"로 구분</span><input name="route" value="${h(v0.route)}" placeholder="예: 용인>일산"></label>
+    </details>
+    <label>보낼 내용<textarea name="msg" rows="6"></textarea></label>
+    <div class="sheet-actions">
+      <button type="button" class="btn ghost" data-cancel>닫기</button>
+      <span class="spacer"></span>
+      ${navigator.share ? `<button type="button" class="btn ghost" data-share>${icon.upload} 공유</button>` : ''}
+      <button type="submit" class="btn">${icon.copy} 복사</button>
+    </div>
+  </form>`;
+  document.body.appendChild(el);
+  requestAnimationFrame(() => el.classList.add('show'));
+  const close = () => { el.classList.remove('show'); setTimeout(() => el.remove(), 300); };
+  const form = $('form', el);
+  const msg = $('textarea[name=msg]', form);
+  let edited = false;
+  // 자정을 넘기면 25:20처럼 24를 더해 적는다
+  const endText = (start, end) => {
+    const s = toMin(start), e = toMin(end);
+    if (s == null || e == null || e >= s) return end;
+    return `${Math.floor(e / 60) + 24}:${String(e % 60).padStart(2, '0')}`;
+  };
+  const build = () => {
+    const v = Object.fromEntries(new FormData(form));
+    const fee = digits(v.fee);
+    return [v.title.trim(), '', v.date.trim(), v.route.trim(), v.start || v.end ? `${v.start}~${endText(v.start, v.end)}` : '', fee ? `견적 ${won(fee)}` : '']
+      .filter((line, i) => i < 2 || line).join('\n');
+  };
+  const refresh = () => { if (!edited) msg.value = build(); };
+  form.addEventListener('input', (e) => {
+    if (e.target === msg) { edited = true; return; }
+    if (e.target.name === 'fee') { const d = digits(e.target.value); e.target.value = d ? won(d) : ''; }
+    refresh();
+  });
+  refresh();
+  el.addEventListener('click', (e) => { if (e.target === el || e.target.closest('[data-cancel]')) close(); });
+  const remember = () => {
+    const v = Object.fromEntries(new FormData(form));
+    const share = { title: v.title.trim(), date: v.date.trim(), route: v.route.trim(), start: v.start, end: v.end, fee: digits(v.fee) };
+    if (editable && JSON.stringify(share) !== JSON.stringify(project.share || {})) lib.setShare(project.id, share).then(() => { project.share = share; }).catch(() => {});
+    const typed = share.route.split('>').map((x) => x.trim());
+    if (typed.length === cities.length) {
+      cities.forEach((c, i) => { if (typed[i] && typed[i] !== c) alias[c] = typed[i]; else if (typed[i] === c) delete alias[c]; });
+      try { localStorage.setItem(CITY_ALIAS_KEY, JSON.stringify(alias)); } catch {}
+    }
+  };
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    remember();
+    toast((await copyText(msg.value)) ? '복사했어요 · 카톡에 붙여넣기 하세요' : '복사하지 못했어요');
+  });
+  $('[data-share]', form)?.addEventListener('click', async () => {
+    remember();
+    try { await navigator.share({ text: msg.value }); } catch (err) { if (err.name !== 'AbortError') toast('공유하지 못했어요'); }
   });
 }
 

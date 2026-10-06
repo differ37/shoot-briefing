@@ -762,3 +762,29 @@ p, li, .stop-role, .tl-loc, .sr-sub { text-wrap: pretty; }
   .nav-btns .btn.nav { font-size: 14px; padding: 10px; gap: 6px; }
 }
 .nb { white-space: nowrap; }
+
+/* ---------- 바로가기 / 시간 기록 / 업무 공유 ---------- */
+.version-bar { position: static; }
+.jump-bar { position: sticky; top: 52px; z-index: 40; background: var(--nav-bg); backdrop-filter: saturate(180%) blur(20px); -webkit-backdrop-filter: saturate(180%) blur(20px); border-bottom: 1px solid var(--line); }
+.jump-scroll { max-width: 1080px; margin: 0 auto; padding: 8px 16px; display: flex; gap: 6px; overflow-x: auto; scrollbar-width: none; }
+.jump-scroll::-webkit-scrollbar { display: none; }
+.jump-scroll a { flex: none; padding: 7px 14px; border-radius: 999px; font-size: 14px; font-weight: 700; color: var(--muted); background: var(--bg-alt); text-decoration: none; }
+.jump-scroll a.on { background: var(--text); color: var(--bg); }
+[id^="sec-"] { scroll-margin-top: 112px; }
+.log-list { list-style: none; margin: 0 0 14px; padding: 0; display: grid; gap: 0; }
+.log-list li { position: relative; padding-left: 18px; }
+.log-list li::before { content: ''; position: absolute; left: 3px; top: 21px; width: 9px; height: 9px; border-radius: 50%; background: var(--accent); }
+.log-list li:not(:last-child)::after { content: ''; position: absolute; left: 7px; top: 32px; bottom: -10px; width: 1.5px; background: color-mix(in srgb, var(--accent) 40%, transparent); }
+.log-list button { width: 100%; display: flex; align-items: center; gap: 12px; padding: 12px 4px; border: 0; background: transparent; color: var(--text); font: inherit; text-align: left; cursor: pointer; border-radius: 10px; }
+.log-list button:disabled { cursor: default; }
+.log-list b { font-size: 18px; font-weight: 800; font-variant-numeric: tabular-nums; min-width: 56px; }
+.log-list span { flex: 1; font-size: 15px; font-weight: 600; }
+.log-list svg { width: 16px; height: 16px; color: var(--faint); }
+.log-actions { display: flex; gap: 8px; }
+.log-actions .btn { flex: 1; justify-content: center; }
+.log-presets { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 4px; }
+.log-presets button { border: 0; border-radius: 999px; padding: 8px 12px; font: inherit; font-size: 13px; font-weight: 700; background: var(--bg-alt); color: var(--text); cursor: pointer; }
+.log-presets button:active { background: var(--accent-soft); color: var(--accent); }
+.form input[type="time"] { font-variant-numeric: tabular-nums; }
+.share-times { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.share-sheet, .log-sheet { max-height: calc(100dvh - 32px); overflow-y: auto; }

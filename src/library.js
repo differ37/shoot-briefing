@@ -191,6 +191,26 @@ export class Library {
     return { project, meta };
   }
 
+  /** 내 시간 기록 [{id, label, time}] (버전과 무관하게 촬영 단위로 저장). 예전 prep(장비집 집합/출발)은 여기로 옮긴다 */
+  async setLog(pid, entries) {
+    await this.load();
+    const project = this.project(pid);
+    if (!project) throw new Error('촬영을 찾을 수 없어요.');
+    if (entries.length) project.log = entries;
+    else delete project.log;
+    delete project.prep;
+    await this.saveIndex(`시간 기록: ${project.title}`);
+  }
+
+  /** 업무 공유 문구에 쓴 값(제목·경로·시간·견적)을 다음에 다시 쓰도록 저장 */
+  async setShare(pid, share) {
+    await this.load();
+    const project = this.project(pid);
+    if (!project) return;
+    project.share = share;
+    await this.saveIndex(`업무 공유 기록: ${project.title}`);
+  }
+
   /** 장비집 집합/출발 시간 (버전과 무관하게 촬영 단위로 저장) */
   async setPrep(pid, { gather = '', depart = '' }) {
     await this.load();
