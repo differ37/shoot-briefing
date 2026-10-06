@@ -186,6 +186,43 @@ export async function compareVersions(apiKey, { prev, next, prevLabel, nextLabel
   });
 }
 
+export const CONTI_SCHEMA = obj({
+  assignments: arr(obj({
+    box: { type: 'integer', description: '그림 번호(빨간 번호)' },
+    item: { type: 'integer', description: '이 그림이 속한 진행표 항목 번호. 콘티·참고 그림이 아니거나(로고·아이콘·지도·표 장식 등) 맞는 항목이 없으면 -1' },
+  }), '번호가 붙은 모든 그림에 대해 하나씩'),
+});
+
+const SYSTEM_CONTI = `당신은 광고·영상 촬영 타임테이블(콜시트)을 읽는 비서입니다.
+타임테이블 페이지 이미지에서 그림(콘티·장소 사진·의상·소품 참고 이미지 등)마다 빨간 테두리와 빨간 번호가 붙어 있습니다.
+각 그림이 아래 진행표의 어느 항목에 해당하는지 정해 주세요.
+
+판단 방법:
+- 그림과 같은 표의 줄(가로 칸)에 적힌 시간, 컷 번호(#08, C#26 등), 장면 설명을 보고 진행표 항목과 맞추세요.
+- 진행표 항목의 track(A CAM / B CAM)이 정해져 있으면 그 캠 열에 있는 그림만 그 항목에 넣으세요.
+- 한 항목에 그림이 여러 개일 수 있습니다. 같은 그림을 두 항목에 넣지는 마세요.
+- 회사 로고, 아이콘, 지도, 표 머리의 장식 그림처럼 특정 진행 항목의 콘티·참고 그림이 아니면 -1로 하세요.
+- 확실하지 않으면 -1로 하세요. 틀리게 넣는 것보다 비워 두는 게 낫습니다.
+- 확대 이미지는 서로 겹치므로 같은 번호를 여러 번 볼 수 있습니다. 번호마다 답은 하나입니다.`;
+
+/** 그림 번호가 표시된 페이지 이미지 + 진행표 → [{box, item}] */
+export async function matchConti(apiKey, { images, schedule, boxCount }) {
+  const content = [];
+  for (const img of images) {
+    content.push({ type: 'text', text: `[${img.label}]` });
+    content.push({ type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: img.data } });
+  }
+  const list = (schedule || []).map((s, i) => `${i}. ${s.start}${s.end ? `~${s.end}` : ''} [${s.track || '전체'}] ${s.kind} · ${s.title}${s.location_name ? ` · ${s.location_name}` : ''}${s.details ? ` · ${String(s.details).replace(/\n/g, ' ')}` : ''}`).join('\n');
+  content.push({ type: 'text', text: `진행표 항목 (번호. 시간 [캠] 종류 · 제목 · 장소 · 내용):\n${list}\n\n그림 번호는 1부터 ${boxCount}까지입니다. 모든 번호에 대해 답해 주세요.` });
+  return runStructured(apiKey, {
+    system: SYSTEM_CONTI,
+    content,
+    schema: CONTI_SCHEMA,
+    effort: 'high',
+    maxTokens: 16000,
+  });
+}
+
 export async function testKey(apiKey) {
   const res = await client(apiKey).messages.create({
     model: MODEL,

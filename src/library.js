@@ -92,6 +92,12 @@ export class Library {
     return this.cache.get(key);
   }
 
+  /** 버전 기록(분석 결과 JSON)을 고쳐 저장 (예: Claude가 맞춘 콘티 결과) */
+  async saveVersion(pid, vid, record, message = '버전 기록 갱신') {
+    await this.store.putText(`projects/${pid}/${vid}.json`, JSON.stringify(record, null, 2), message);
+    this.cache.set(`${pid}/${vid}`, Promise.resolve(record));
+  }
+
   getPdf(pid, vid) {
     return this.store.getBlob(`projects/${pid}/${vid}.pdf`);
   }

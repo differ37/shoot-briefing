@@ -790,3 +790,6 @@ p, li, .stop-role, .tl-loc, .sr-sub { text-wrap: pretty; }
 .share-sheet, .log-sheet { max-height: calc(100dvh - 32px); overflow-y: auto; }
 .orig-full { margin-bottom: 14px; padding-bottom: 14px; border-bottom: 1px solid var(--line); }
 .orig-full .row-gap .muted { flex-basis: 100%; }
+.conti-status { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; font-size: 13px; color: var(--muted); margin: -4px 0 12px; }
+.conti-status svg { width: 16px; height: 16px; color: var(--accent); }
+.conti-status button { border: 0; background: none; color: var(--accent); font: inherit; font-weight: 700; padding: 0; cursor: pointer; }

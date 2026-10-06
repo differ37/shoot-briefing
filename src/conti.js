@@ -7,7 +7,8 @@
 // 그림은 페이지 전체를 렌더링하지 않고 그 영역만 잘라 렌더링한다(휴대폰 메모리 절약).
 import * as pdfjsLib from 'pdfjs-dist';
 
-const TIME_RE = /^(\d{1,2}):(\d{2})$/;
+// "06:30" 또는 "06:30 ~ 08:00" 같은 범위(시작 시간을 쓴다)
+const TIME_RE = /^(\d{1,2}):(\d{2})(?:\s*[~\-–]\s*\d{1,2}:\d{2})?$/;
 const toMin = (s) => {
   const m = String(s || '').trim().match(TIME_RE);
   return m ? Number(m[1]) * 60 + Number(m[2]) : null;
@@ -74,10 +75,12 @@ function timeRows(items, vp) {
 /** → { rows: [{page, min, y, images:[{x,y,w,h}]}] } (모든 페이지, 순서대로) */
 export async function extractConti(pdf, pages = null) {
   const rows = [];
+  const all = []; // 시간 줄과 상관없이 찾은 그림 전부 (Claude 맞추기용)
   for (const p of pages || Array.from({ length: pdf.numPages }, (_, i) => i + 1)) {
     const page = await pdf.getPage(p);
     const vp = page.getViewport({ scale: 1 });
     const [tc, { images, boxes }] = await Promise.all([page.getTextContent(), pageShapes(page, vp)]);
+    for (const b of images) all.push({ ...b, page: p });
     const times = timeRows(tc.items, vp);
     if (!times.length) continue;
     const pr = times.map((t) => ({ page: p, min: t.min, y: t.y, images: [] }));
@@ -128,7 +131,7 @@ export async function extractConti(pdf, pages = null) {
     for (const r of pr) r.images.sort((a, b) => a.y - b.y || a.x - b.x);
     rows.push(...pr);
   }
-  return { rows };
+  return { rows, boxes: all };
 }
 
 /**
@@ -218,4 +221,75 @@ export function thumbRenderer(pdf, maxPixels = 12e6) {
     c.getContext('2d').drawImage(canvas, box.x * scale, box.y * scale, sw, sh, 0, 0, c.width, c.height);
     return new Promise((res) => c.toBlob(res, 'image/jpeg', 0.85));
   };
+}
+
+// ---------------------------------------------------------------- Claude로 맞추기
+// 그림마다 번호 표시를 그린 페이지 이미지를 만들어 Claude에게 "몇 번 그림이 어느 진행표 항목인지" 묻는다.
+
+/** boxes: [{n, page, x, y, w, h}] → Claude에 보낼 이미지 [{label, data}] (페이지 개요 + 확대 타일) */
+export async function annotatedImages(pdf, boxes, onProgress) {
+  const byPage = new Map();
+  for (const b of boxes) {
+    if (!byPage.has(b.page)) byPage.set(b.page, []);
+    byPage.get(b.page).push(b);
+  }
+  const out = [];
+  const TILE = 1500, OVERLAP = 160;
+  const jpeg = (c) => c.toDataURL('image/jpeg', 0.85).split(',')[1];
+  const crop = (src, x, y, w, h, max) => {
+    const s = Math.min(1, max / Math.max(w, h));
+    const c = document.createElement('canvas');
+    c.width = Math.round(w * s); c.height = Math.round(h * s);
+    c.getContext('2d').drawImage(src, x, y, w, h, 0, 0, c.width, c.height);
+    return c;
+  };
+  for (const [p, list] of [...byPage].sort((a, b) => a[0] - b[0])) {
+    onProgress?.(`${p}쪽 그림 번호 표시 중`);
+    const page = await pdf.getPage(p);
+    const base = page.getViewport({ scale: 1 });
+    const scale = Math.min(4, 2800 / base.width, Math.sqrt(14e6 / (base.width * base.height)));
+    const viewport = page.getViewport({ scale });
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.round(viewport.width); canvas.height = Math.round(viewport.height);
+    const ctx = canvas.getContext('2d');
+    ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, canvas.width, canvas.height);
+    await page.render({ canvasContext: ctx, canvas, viewport, intent: 'print' }).promise;
+    const fs = Math.max(18, Math.round(canvas.width / 90));
+    ctx.font = `bold ${fs}px sans-serif`;
+    for (const b of list) {
+      const x = b.x * scale, y = b.y * scale, w = b.w * scale, h = b.h * scale;
+      ctx.lineWidth = Math.max(2, fs / 8); ctx.strokeStyle = '#ff0040'; ctx.strokeRect(x, y, w, h);
+      const label = String(b.n);
+      const tw = ctx.measureText(label).width + fs * 0.6;
+      ctx.fillStyle = '#ff0040'; ctx.fillRect(x, y, tw, fs * 1.25);
+      ctx.fillStyle = '#fff'; ctx.fillText(label, x + fs * 0.3, y + fs * 1.0);
+    }
+    const W = canvas.width, H = canvas.height;
+    out.push({ label: `${p}쪽 전체 (빨간 번호 = 그림 번호)`, data: jpeg(crop(canvas, 0, 0, W, H, 1568)) });
+    const cols = Math.max(1, Math.ceil((W - OVERLAP) / (TILE - OVERLAP)));
+    const rows = Math.max(1, Math.ceil((H - OVERLAP) / (TILE - OVERLAP)));
+    const tw = Math.ceil((W + OVERLAP * (cols - 1)) / cols), th = Math.ceil((H + OVERLAP * (rows - 1)) / rows);
+    if (cols * rows > 1) {
+      for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) {
+        const x = Math.max(0, Math.min(W - tw, c * (tw - OVERLAP))), y = Math.max(0, Math.min(H - th, r * (th - OVERLAP)));
+        out.push({ label: `${p}쪽 확대 (위에서 ${r + 1}번째, 왼쪽에서 ${c + 1}번째)`, data: jpeg(crop(canvas, x, y, tw, th, 1568)) });
+      }
+    }
+    canvas.width = canvas.height = 0;
+  }
+  return out;
+}
+
+/** 저장된 Claude 결과 {boxes, assign:{그림번호: 항목번호}} → Map(항목번호 → {images}) */
+export function mapFromAI(ai) {
+  const byN = new Map(ai.boxes.map((b) => [b.n, b]));
+  const result = new Map();
+  for (const [n, item] of Object.entries(ai.assign || {})) {
+    const b = byN.get(Number(n));
+    if (!b || item < 0) continue;
+    if (!result.has(item)) result.set(item, { images: [] });
+    result.get(item).images.push(b);
+  }
+  for (const v of result.values()) v.images.sort((a, b) => a.page - b.page || a.y - b.y || a.x - b.x);
+  return result;
 }

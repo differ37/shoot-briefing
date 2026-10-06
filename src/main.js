@@ -3,10 +3,10 @@ import { icon } from './icons.js';
 import { avatarHtml, displayName } from './profiles.js';
 import { GitHubStore, LocalStore, PrefixedStore, originals } from './storage.js';
 import { Library, versionKeyFromName } from './library.js';
-import { analyzeTimetable, compareVersions, testKey } from './claude.js';
+import { analyzeTimetable, compareVersions, matchConti, testKey } from './claude.js';
 import { makeReducedPdf, openPdf, pdfToAnalysisImages, pdfThumbnail, pickPages, renderPagesInto } from './pdf.js';
 import { installTypeset } from './typeset.js';
-import { extractConti, matchSchedule, renderRegion, thumbRenderer } from './conti.js';
+import { annotatedImages, extractConti, mapFromAI, matchSchedule, renderRegion, thumbRenderer } from './conti.js';
 import { computeMarks } from './diff.js';
 import { openNaver, openKakao, copyText } from './nav.js';
 import { buildQuote, cityOf, defaultContent, downloadBlob, finalMessage, hasSavedProfile, hasSavedSource, loadProfile, loadSource, prepareSourceImage, quoteFileName, saveProfile, saveSource, sourceDataUrl, sourceFile, DEFAULT_ITEM, MAX_DAYS } from './quote.js';
@@ -663,6 +663,7 @@ async function renderProject(space, pid, vid) {
       <button class="conti-toggle" id="contiToggle" aria-pressed="false">${icon.camera}<span>콘티</span></button>
       ${tracks.length > 1 ? `<div class="seg" id="trackSeg"><button class="on" data-track="">전체</button>${tracks.map((t) => `<button data-track="${h(t)}">${h(t)}</button>`).join('')}</div>` : ''}
     </div>
+    <p class="conti-status" id="contiStatus" hidden></p>
     <ol class="timeline">
       ${sched.map((s) => `
       <li class="tl ${kindClass[s.kind] || 'k-etc'}" data-track="${h(s.track)}" data-i="${s.i}">
@@ -791,16 +792,43 @@ async function renderProject(space, pid, vid) {
     $('#contiToggle')?.setAttribute('aria-pressed', String(on));
     $$('.tl-conti').forEach((el) => { el.hidden = !on || !el.childElementCount; });
   };
-  const loadConti = async () => {
-    if (contiState) return setContiVisible(true);
+  const contiStatus = (html) => { const el = $('#contiStatus'); if (el) { el.hidden = !html; el.innerHTML = html || ''; } };
+  // 항목별 콘티: ① 저장된 Claude 결과 ② (편집 가능 + Claude 키) Claude로 새로 맞춰 저장 ③ 규칙(시간 줄) 방식
+  const contiMatches = async (pdf, force = false) => {
+    if (rec.contiAI && !force) return mapFromAI(rec.contiAI);
+    // 큰 PDF를 줄여 저장한 경우엔 원본에서 미리 뽑아 둔 위치를 쓴다 (줄인 PDF엔 글자·그림 정보가 없음)
+    const ext = rec.conti?.rows ? { rows: rec.conti.rows, boxes: rec.conti.boxes || rec.conti.rows.flatMap((r) => r.images) } : await extractConti(pdf);
+    if (!(canEdit(space) && settings.anthropicKey && ext.boxes.length && a.schedule?.length)) return matchSchedule(a.schedule, ext.rows);
+    try {
+      contiStatus(`${icon.sparkle} Claude가 진행표에 맞는 콘티를 찾는 중… (1분 정도)`);
+      const seen = new Set();
+      const boxes = ext.boxes
+        .filter((b) => { const k = `${b.page}:${Math.round(b.x)}:${Math.round(b.y)}:${Math.round(b.w)}`; return !seen.has(k) && seen.add(k); })
+        .map((b, k) => ({ n: k + 1, page: b.page, x: b.x, y: b.y, w: b.w, h: b.h }));
+      const images = await annotatedImages(pdf, boxes);
+      const { data } = await matchConti(settings.anthropicKey, { images, schedule: a.schedule, boxCount: boxes.length });
+      const assign = {};
+      for (const x of data.assignments || []) if (x.item >= 0 && x.item < a.schedule.length && x.box >= 1 && x.box <= boxes.length) assign[x.box] = x.item;
+      rec.contiAI = { boxes, assign, at: new Date().toISOString() };
+      lib.saveVersion(pid, meta.id, rec, `콘티 맞추기: ${project.title} ${meta.label}`).catch((err) => console.warn('콘티 결과 저장 실패', err));
+      return mapFromAI(rec.contiAI);
+    } catch (err) {
+      console.warn('Claude 콘티 맞추기 실패', err);
+      toast('Claude로 콘티를 맞추지 못해 기본 방식으로 보여줘요');
+      return matchSchedule(a.schedule, ext.rows);
+    }
+  };
+  const loadConti = async (force = false) => {
+    if (contiState && !force) return setContiVisible(true);
+    if (contiState === 'loading') return;
     contiState = 'loading';
     const btn = $('#contiToggle');
     btn?.classList.add('busy');
+    if (force) $$('.tl-conti').forEach((el) => { el.innerHTML = ''; el.hidden = true; });
     try {
       const pdf = await openPdf(await (await getPdfBlob()).arrayBuffer());
-      // 큰 PDF를 줄여 저장한 경우엔 원본에서 미리 뽑아 둔 콘티 위치를 쓴다 (줄인 PDF엔 글자 정보가 없음)
-      const { rows } = rec.conti?.rows ? rec.conti : await extractConti(pdf);
-      const found = matchSchedule(a.schedule, rows);
+      const found = await contiMatches(pdf, force);
+      contiStatus(rec.contiAI && canEdit(space) ? `${icon.sparkle} Claude가 진행표에 맞춘 콘티예요 · <button type="button" data-conti-redo>다시 맞추기</button>` : '');
       if (!found.size) { toast('이 타임테이블에서는 콘티 그림을 찾지 못했어요'); contiState = 'done'; return; }
       const dpr = Math.min(2, window.devicePixelRatio || 1);
       const thumb = thumbRenderer(pdf);
@@ -828,12 +856,14 @@ async function renderProject(space, pid, vid) {
       contiState = 'done';
     } catch (err) {
       console.error(err);
+      contiStatus('');
       toast('콘티 그림을 불러오지 못했어요');
       contiState = null;
     } finally {
       btn?.classList.remove('busy');
     }
   };
+  $('#contiStatus')?.addEventListener('click', (e) => { if (e.target.closest('[data-conti-redo]')) loadConti(true); });
   $('#contiToggle')?.addEventListener('click', () => {
     const on = $('#contiToggle').getAttribute('aria-pressed') !== 'true';
     try { localStorage.setItem(CONTI_KEY, on ? 'on' : 'off'); } catch {}
@@ -1748,11 +1778,12 @@ async function uploadFilesInner(files, projectId, space) {
       let extra = {};
       if (file.size > BIG_PDF) {
         sheet.detail('원본이 커서 분석한 페이지만 가볍게 저장할 준비 중…');
-        const { rows } = await extractConti(pdf, pages);
+        const { rows, boxes } = await extractConti(pdf, pages);
         const at = new Map(pages.map((p, k) => [p, k + 1]));
         const contiRows = rows.filter((r) => at.has(r.page)).map((r) => ({ ...r, page: at.get(r.page), images: r.images.map((b) => ({ ...b, page: at.get(b.page) })) }));
+        const contiBoxes = boxes.filter((b) => at.has(b.page)).map((b) => ({ ...b, page: at.get(b.page) }));
         pdfBlob = await makeReducedPdf(pdf, pages, (t) => sheet.detail(t));
-        extra = { conti: { rows: contiRows }, reduced: { pages, totalPages: pdf.numPages, originalSize: file.size } };
+        extra = { conti: { rows: contiRows, boxes: contiBoxes }, reduced: { pages, totalPages: pdf.numPages, originalSize: file.size } };
       }
       pdf.loadingTask?.destroy?.(); // 워커가 들고 있는 원본(최대 수백 MB)을 분석 요청 전에 놓아 준다
       sheet.step('analyze', `이미지 ${images.length}장`);
