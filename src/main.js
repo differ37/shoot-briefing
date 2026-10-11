@@ -241,6 +241,22 @@ async function openDrawer() {
 }
 document.addEventListener('click', (e) => { if (e.target.closest('[data-action="drawer"]')) openDrawer(); });
 
+// ---------------------------------------------------------------- 계정 잠금
+// 관리자가 사용자 관리에서 잠근 멤버(accounts.json의 locked)는 로그인된 기기에서도 로그아웃시킨다.
+// 화면에서 막는 것이므로, 확실히 끊으려면 멤버 토큰도 GitHub에서 폐기해야 한다(폐기되면 401 → 자동 로그아웃).
+let lockCheckedAt = 0;
+async function lockedOut() {
+  if (isAdmin() || !settings.userId || Date.now() - lockCheckedAt < 60000) return false;
+  const list = await fetchAccounts();
+  if (!list) return false; // 목록을 못 받으면(오프라인 등) 그냥 둔다
+  lockCheckedAt = Date.now();
+  const me = list.find((a) => a.id === settings.userId);
+  return !me || !!me.locked;
+}
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible' && isConfigured() && !isAdmin()) lockedOut().then((out) => out && route());
+});
+
 // ---------------------------------------------------------------- 라우터
 async function route() {
   const parts = location.hash.replace(/^#\/?/, '').split('/').filter(Boolean).map(decodeURIComponent);
@@ -248,6 +264,7 @@ async function route() {
   try {
     if (parts[0] === 'settings') { currentSpace = null; return renderSettings(); }
     if (!isConfigured()) { currentSpace = null; return renderLogin(); }
+    if (await lockedOut()) { logout(); currentSpace = null; return renderLogin('관리자가 이 계정을 잠갔어요. 이 기기에서 로그아웃했어요.'); }
     await loadAccounts();
     if (parts[0] === 'p' && parts[1]) { location.replace(L(mySpace(), parts[1], parts[2])); return; } // 예전 주소
     if (parts[0] !== 's' || !parts[1]) { location.replace(L(mySpace())); return; }
@@ -275,13 +292,14 @@ function renderLogin(message = '') {
     <p class="eyebrow">CALL SHEET BRIEFING</p>
     <h1>타임테이블,<br>이제 한눈에.</h1>
     <p class="lead">도착 시간, 촬영지 주소, 이동 동선, 담당자 연락처를 한 화면에. 새 버전이 나오면 무엇이 바뀌었는지 바로 보여드립니다.</p>
+    ${message ? `<p class="login-msg login-notice">${icon.alert} ${h(message)}</p>` : ''}
     <div class="account-pick" id="accountPick" hidden></div>
     <form class="login card" id="loginForm">
       <div class="login-who" id="loginWho" hidden></div>
       <label id="idField">아이디<input name="id" autocomplete="username" autocapitalize="none" spellcheck="false" required></label>
       <label>비밀번호<input name="pw" type="password" autocomplete="current-password" required></label>
       <button class="btn large block" type="submit">로그인</button>
-      <p class="login-msg" id="loginMsg">${h(message)}</p>
+      <p class="login-msg" id="loginMsg"></p>
     </form>
     <a class="text-link setup-link" href="#/settings">관리자 처음 설정</a>
   </section>`);
@@ -290,7 +308,8 @@ function renderLogin(message = '') {
   $('input[name=id]', form).focus();
 
   // 계정 선택 카드 (공개 목록이 있을 때)
-  fetchAccounts().then((list) => {
+  fetchAccounts().then((all) => {
+    const list = all?.filter((a) => !a.locked);
     if (!list?.length) return;
     const pickEl = $('#accountPick');
     pickEl.hidden = false;
@@ -324,6 +343,7 @@ function renderLogin(message = '') {
     btn.textContent = '확인 중…';
     $('#loginMsg').textContent = '';
     try {
+      if ((await fetchAccounts())?.find((a) => a.id === normId(id))?.locked) throw new Error('잠긴 계정이에요. 관리자(준연)에게 문의하세요.');
       const data = await login(id, pw);
       saveSettings({ ...DEFAULTS, ...pick(data, SESSION_FIELDS), userId: normId(id) });
       // 견적서용 내 정보(암호화 저장)를 비밀번호가 있을 때 미리 풀어 둔다
@@ -1608,7 +1628,8 @@ function renderSettings() {
         </div>
         <input class="u-pw" type="password" autocomplete="new-password" placeholder="${u.saved ? '새 비밀번호 (바꿀 때만)' : '비밀번호'}">
         <div class="user-actions">
-          <span class="u-state">${u.saved ? `${icon.check} 저장됨${u.updatedAt ? ` · ${h(new Date(u.updatedAt).toLocaleDateString('ko-KR'))}` : ''}` : '아직 저장 안 됨'}</span>
+          <span class="u-state">${u.locked ? `${icon.alert} 잠김 · 로그인 불가` : u.saved ? `${icon.check} 저장됨${u.updatedAt ? ` · ${h(new Date(u.updatedAt).toLocaleDateString('ko-KR'))}` : ''}` : '아직 저장 안 됨'}</span>
+          ${u.saved && u.role !== 'admin' ? `<button type="button" class="btn ghost u-lock">${u.locked ? '잠금 해제' : '잠그기'}</button>` : ''}
           <button type="button" class="btn ghost u-save">저장</button>
           ${u.saved ? `<button type="button" class="del u-del" aria-label="삭제">${icon.trash}</button>` : ''}
         </div>
@@ -1616,10 +1637,10 @@ function renderSettings() {
   };
 
   const saveIndex = async () => {
-    const list = users.filter((u) => u.saved).map(({ id, role, updatedAt }) => ({ id, role, updatedAt }));
+    const list = users.filter((u) => u.saved).map(({ id, role, updatedAt, locked }) => ({ id, role, updatedAt, ...(locked ? { locked } : {}) }));
     await dataStore().putText(usersPath, JSON.stringify({ users: list }, null, 2), '사용자 목록 갱신');
-    // 로그인 화면의 계정 선택 카드용 공개 목록 (아이디·권한만)
-    await publishAccounts(new GitHubStore({ token: settings.ghToken, owner: repo.owner, repo: repo.repo }), list.map(({ id, role }) => ({ id, role })));
+    // 로그인 화면의 계정 선택 카드용 공개 목록 (아이디·권한·잠금만)
+    await publishAccounts(new GitHubStore({ token: settings.ghToken, owner: repo.owner, repo: repo.repo }), list.map(({ id, role, locked }) => ({ id, role, ...(locked ? { locked } : {}) })));
     accounts = null;
   };
 
@@ -1655,6 +1676,23 @@ function renderSettings() {
         renderRows();
         toast(`${u.id} 계정을 삭제했어요`);
       } catch (err) { toast(permErr(err)); }
+      return;
+    }
+
+    if (e.target.closest('.u-lock')) {
+      const b = e.target.closest('.u-lock');
+      b.disabled = true;
+      const was = !!u.locked;
+      if (was) delete u.locked; else u.locked = true;
+      try {
+        await saveIndex();
+        renderRows();
+        toast(was ? `${displayName(u.id)} 계정 잠금을 풀었어요` : `${displayName(u.id)} 계정을 잠갔어요. 로그인된 기기도 다음에 열 때 로그아웃돼요`);
+      } catch (err) {
+        if (was) u.locked = true; else delete u.locked;
+        b.disabled = false;
+        toast(permErr(err));
+      }
       return;
     }
 

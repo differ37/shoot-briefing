@@ -449,6 +449,8 @@ main { min-height: calc(100vh - 140px); }
 .login input:focus, .user-row input:focus, .user-row select:focus { border-color: var(--accent); box-shadow: 0 0 0 4px var(--accent-soft); }
 .login .btn { margin-top: 6px; }
 .login-msg { min-height: 20px; font-size: 14px; color: var(--danger); margin: 10px 0 0; text-align: center; }
+.login-notice { display: flex; align-items: center; justify-content: center; gap: 6px; margin: 0 auto 18px; font-weight: 700; }
+.login-notice svg { width: 16px; height: 16px; flex: none; }
 .setup-link { font-size: 13px; color: var(--faint); }
 .user-chip { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px 4px 4px !important; border-radius: 999px; background: var(--bg-alt); color: var(--text) !important; font-weight: 600; }
 .avatar.sm { width: 26px; height: 26px; font-size: 12px; }
