@@ -130,8 +130,9 @@ export class Library {
     } else {
       Object.assign(project, {
         title: prod.project_title || project.title,
-        date: prod.shoot_date || project.date,
-        weekday: prod.weekday || project.weekday,
+        // 사용자가 직접 고친 촬영일(dateFixed)은 새 버전이 와도 그대로 둔다
+        date: project.dateFixed ? project.date : prod.shoot_date || project.date,
+        weekday: project.dateFixed ? project.weekday : prod.weekday || project.weekday,
         production: prod.production_company || project.production,
         shootType: prod.shoot_type || project.shootType,
       });
@@ -206,6 +207,27 @@ export class Library {
     else delete project.log;
     delete project.prep;
     await this.saveIndex(`시간 기록: ${project.title}`);
+  }
+
+  /**
+   * 촬영일 직접 고치기 (타임테이블에 날짜가 잘못 적혀 있을 때). date가 없으면 최신 버전의 타임테이블 날짜로 되돌린다.
+   * 촬영 id(폴더 이름)는 바꾸지 않는다.
+   */
+  async setDate(pid, date) {
+    await this.load();
+    const project = this.project(pid);
+    if (!project) throw new Error('촬영을 찾을 수 없어요.');
+    if (date) {
+      project.date = date;
+      project.weekday = '일월화수목금토'[new Date(date + 'T00:00:00').getDay()];
+      project.dateFixed = true;
+    } else {
+      const prod = (await this.getVersion(pid, this.latest(project).id))?.analysis?.production || {};
+      project.date = prod.shoot_date || project.date;
+      project.weekday = prod.weekday || '';
+      delete project.dateFixed;
+    }
+    await this.saveIndex(`촬영일 ${date ? '수정' : '되돌리기'}: ${project.title}`);
   }
 
   /** 업무 공유 문구에 쓴 값(제목·경로·시간·견적)을 다음에 다시 쓰도록 저장 */

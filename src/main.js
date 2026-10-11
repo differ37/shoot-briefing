@@ -504,6 +504,9 @@ async function renderProject(space, pid, vid) {
   const prevRec = rec.changes?.against ? await lib.getVersion(pid, rec.changes.against) : null;
   const marks = computeMarks(prevRec?.analysis, a);
   const prod = a.production || {};
+  // 직접 고친 촬영일이 있으면 그걸, 없으면 이 버전 타임테이블에 적힌 날짜
+  const shootDate = project.dateFixed ? project.date : prod.shoot_date || project.date;
+  const shootWeekday = project.dateFixed ? project.weekday : prod.weekday;
 
   // --- 히어로
   const hero = `
@@ -511,7 +514,7 @@ async function renderProject(space, pid, vid) {
     <div class="hero-text">
       <p class="eyebrow">${h([prod.production_company, prod.shoot_type].filter(Boolean).join(' · ') || 'CALL SHEET')}</p>
       <h1>${h(prod.project_title || project.title)}</h1>
-      <p class="lead">${h(prettyDate(prod.shoot_date || project.date, prod.weekday))} <span class="dday">${h(dday(prod.shoot_date || project.date))}</span>${canEdit(space) ? `<button type="button" class="mini-btn" data-log-add>${icon.clock}시간 기록</button>` : ''}</p>
+      <p class="lead">${canEdit(space) ? `<button type="button" class="date-btn" data-date-edit title="촬영일 고치기">${h(prettyDate(shootDate, shootWeekday))}</button>` : h(prettyDate(shootDate, shootWeekday))} <span class="dday">${h(dday(shootDate))}</span>${project.dateFixed ? '<span class="date-fixed">직접 고침</span>' : ''}${canEdit(space) ? `<button type="button" class="mini-btn" data-log-add>${icon.clock}시간 기록</button>` : ''}</p>
       <div class="ver-line">
         <span class="pill ${isLatest ? 'latest' : 'old'}">${isLatest ? '최신' : '이전 버전'} · ${h(meta.label)}</span>
         ${rec.changes ? `<span class="pill ${rec.changes.changes.length ? 'warn' : ''}">${h(rec.changes.againstLabel)} 대비 변경 ${rec.changes.changes.length}건</span>` : '<span class="pill">첫 버전</span>'}
@@ -768,6 +771,7 @@ async function renderProject(space, pid, vid) {
   bindJumpBar();
   hydrateThumbs(lib);
   $$('[data-log-add]').forEach((b) => b.addEventListener('click', () => openLogSheet(lib, project, null)));
+  $('[data-date-edit]')?.addEventListener('click', () => openDateSheet(lib, project, shootDate, prod.shoot_date));
   $$('[data-log-edit]').forEach((b) => b.addEventListener('click', () => openLogSheet(lib, project, Number(b.dataset.logEdit))));
   $('[data-share-work]')?.addEventListener('click', () => openShareSheet(lib, project, a, canEdit(space)));
 
@@ -982,6 +986,49 @@ function bindJumpBar() {
   const handler = () => { if (!raf) raf = requestAnimationFrame(() => { raf = 0; if (!bar.isConnected) return window.removeEventListener('scroll', handler); onScroll(); }); };
   window.addEventListener('scroll', handler, { passive: true });
   onScroll();
+}
+
+// 촬영일 고치기 — 타임테이블에 날짜가 잘못 적혀 '지난 촬영'으로 가 버릴 때
+function openDateSheet(lib, project, current, sheetDate) {
+  const el = document.createElement('div');
+  el.className = 'sheet-backdrop';
+  el.innerHTML = `
+  <form class="sheet form" autocomplete="off">
+    <p class="eyebrow">${h(project.title)}</p>
+    <h2>촬영일 고치기</h2>
+    <p class="muted small">타임테이블 날짜가 잘못된 경우 실제 촬영일로 바꿔 주세요. 새 버전을 올려도 고친 날짜가 유지돼요.</p>
+    <label>촬영일<input type="date" name="date" value="${h(current || '')}" required></label>
+    ${project.dateFixed ? `<button type="button" class="date-reset" data-reset>${sheetDate ? `타임테이블 날짜(${Number(sheetDate.slice(5, 7))}/${Number(sheetDate.slice(8, 10))})로` : '타임테이블 날짜로'} 되돌리기</button>` : ''}
+    <div class="sheet-actions">
+      <span class="spacer"></span>
+      <button type="button" class="btn ghost" data-cancel>취소</button>
+      <button type="submit" class="btn">저장</button>
+    </div>
+  </form>`;
+  document.body.appendChild(el);
+  requestAnimationFrame(() => el.classList.add('show'));
+  const close = () => { el.classList.remove('show'); setTimeout(() => el.remove(), 300); };
+  const form = $('form', el);
+  el.addEventListener('click', (e) => { if (e.target === el || e.target.closest('[data-cancel]')) close(); });
+  const save = async (date, msg) => {
+    $$('button', form).forEach((b) => (b.disabled = true));
+    try {
+      await lib.setDate(project.id, date);
+      close();
+      toast(msg);
+      route();
+    } catch (err) {
+      toast(err.status === 403 || err.status === 404 ? '저장 권한이 없어요' : err.message);
+      $$('button', form).forEach((b) => (b.disabled = false));
+    }
+  };
+  $('[data-reset]', form)?.addEventListener('click', () => save(null, '타임테이블 날짜로 되돌렸어요'));
+  form.addEventListener('submit', (e) => {
+    e.preventDefault();
+    const date = new FormData(form).get('date');
+    if (!date) return toast('날짜를 골라 주세요');
+    save(date, `촬영일을 ${prettyDate(date)}로 바꿨어요`);
+  });
 }
 
 const LOG_PRESETS = ['사무실 집합', '장비집 집합', '장비집 출발', '현장 도착', '현장 출발', '현장 종료', '장비집 도착', '업무 종료'];

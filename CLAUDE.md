@@ -24,7 +24,7 @@ npm run build
 
 - 로그인: 계정 카드(준연·효권·신훈) 선택 → 비밀번호
 - 홈: 다가오는 촬영(크게) → 예정된 촬영 목록 → **견적서 다운로드** 버튼 → PDF 올리기 → 지난 촬영
-- 브리핑(촬영 1건): 제목·날짜·"시간 기록" 버튼 → 동선 요약 → 버전 칩 → **바로가기 바(고정)** →
+- 브리핑(촬영 1건): 제목·날짜(편집 권한이면 눌러서 촬영일 고치기, 고쳤으면 "직접 고침" 표시)·"시간 기록" 버튼 → 동선 요약 → 버전 칩 → **바로가기 바(고정)** →
   내 시간 기록(+ 업무 공유) → 변경사항 → 촬영팀 도착 카드(내비 버튼) → 브리핑 → 촬영지·동선 → 팀별 도착 →
   진행 타임라인(콘티 그림) → 체크사항 → 연락처 → 원본 타임테이블 → 버전 히스토리
 - 옆 메뉴: 다른 사람 스케줄 보기, 견적서 만들기, 설정, 로그아웃
@@ -45,7 +45,8 @@ npm run build
   (GitHub Releases는 다운로드 리다이렉트·업로드가 CORS를 막아 브라우저에서 못 씀 — 2026-10-06 확인)
 - `src/library.js` — 촬영(project) ⊃ 버전 데이터 관리, 버전 순서(파일명 `v0930_01`), 변경 재계산, `saveVersion`(버전 JSON 고쳐 저장).
   내 시간 기록 `project.log=[{id,label,time}]`(예전 `project.prep` 장비집 집합/출발은 `logOf()`가 기록으로 바꿔 보여주고 저장 시 log로 옮김),
-  업무 공유에 쓴 값 `project.share={title,date,route,start,end,fee}`
+  업무 공유에 쓴 값 `project.share={title,date,route,start,end,fee}`,
+  촬영일 직접 고치기 `setDate(pid, date|null)` → `project.dateFixed=true`면 새 버전이 와도 날짜 유지(null이면 최신 버전 타임테이블 날짜로 되돌림, 촬영 id는 안 바꿈)
 - `src/storage.js` — `GitHubStore`(Contents API, 1MB 넘으면 raw로 읽음) / `LocalStore`(IndexedDB) / `PrefixedStore`(사람별 폴더) / `originals`(큰 원본 기기 보관)
 - `src/vault.js` — 아이디/비밀번호 로그인(서버 없음), 공개 계정 목록, `encryptUser`/`decryptUser`(큰 데이터는 base64 변환을 나눠서)
 - `src/diff.js` — 이전 버전 대비 항목별 NEW/변경 배지
@@ -83,7 +84,7 @@ npm run build
 - 멤버 공간 = `spaces/<id>/` 아래 같은 구조
 - `users.json` — 계정 목록(아이디·권한만)
 - 버전 JSON(`<vid>.json`): `analysis`, `changes`, (큰 PDF면) `reduced`·`conti`, (콘티 맞춘 뒤) `contiAI`
-- `index.json`의 project: `title, date, weekday, production, versions[], log[], share{}, callTime, callPlace`
+- `index.json`의 project: `title, date, weekday, dateFixed, production, versions[], log[], share{}, callTime, callPlace`
 
 ## 기기(브라우저)에만 저장되는 것 (localStorage / IndexedDB)
 
@@ -113,7 +114,7 @@ npm run build
   - 끝나면 `public/__test/`, .gitignore 줄, IndexedDB(`shoot-briefing`, `shoot-briefing-originals`)·localStorage 테스트 데이터를 지우고 dev 서버를 끈다.
 - **이 컴퓨터에는 Claude API 키가 없다**(`ant` 없음, 환경변수 없음) — 실제 Claude 호출(분석·콘티 맞추기)은 사용자가 휴대폰에서 확인해야 한다.
   로그인 비밀번호가 필요한 흐름(실제 로그인, 사용자 관리)도 직접 테스트할 수 없다.
-- 배포 후 확인을 부탁할 때는 `?v=N`을 붙인 주소를 준다(GitHub Pages가 HTML을 10분 캐시). **지금까지 v=15까지 썼다** → 다음은 v=16.
+- 배포 후 확인을 부탁할 때는 `?v=N`을 붙인 주소를 준다(GitHub Pages가 HTML을 10분 캐시). **지금까지 v=16까지 썼다** → 다음은 v=17.
 - 사용자는 모바일(아이폰)로 주로 본다. 새 화면은 390px 폭에서 줄바꿈·넘침을 꼭 확인할 것.
 - push(=배포)는 사용자가 "배포해줘"라고 할 때. 사용자가 휴대폰으로 테스트하며 버그를 알려주는 경우엔 고친 뒤 바로 배포해 왔다.
 - 사용자에게는 한국어로, 쉬운 말로 설명한다(개발 용어 최소화). 커밋 메시지는 한국어.
@@ -143,6 +144,7 @@ npm run build
 
 ### 2026-10-11
 - 사진·캡처로도 업로드 (`imagesToPdf`) — 로컬에서 변환·묶기·Claude 호출 직전까지 확인. (배포함 v=15, **실제 분석 결과는 아이폰에서 미확인**)
+- 촬영일 직접 고치기 — 타임테이블 날짜가 잘못돼 '지난 촬영'으로 가는 문제. 브리핑의 날짜를 누르면 날짜 선택 창(v=16 배포)
 
 ## 확인 대기 / 다음 후보
 

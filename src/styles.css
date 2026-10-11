@@ -552,6 +552,17 @@ main { min-height: calc(100vh - 140px); }
 .past-box .shoot-list { opacity: .8; }
 .past-box .sr-date { background: var(--bg-alt); color: var(--muted); }
 
+/* ---------- 촬영일 고치기 ---------- */
+.date-btn {
+  font: inherit; color: inherit; background: none; border: 0; padding: 0; cursor: pointer;
+  text-decoration: underline dotted color-mix(in srgb, currentColor 45%, transparent); text-underline-offset: 4px;
+}
+.date-reset { display: block; margin: 4px 0 0; padding: 6px 0; border: 0; background: none; color: var(--accent); font: inherit; font-size: 14px; font-weight: 700; cursor: pointer; }
+.date-fixed {
+  display: inline-block; margin-left: 6px; vertical-align: 3px; font-size: 11px; font-weight: 700;
+  padding: 2px 7px; border-radius: 999px; background: var(--bg-alt); color: var(--muted);
+}
+
 /* ---------- 시간 작성 ---------- */
 .mini-btn {
   display: inline-flex; align-items: center; gap: 4px; margin-left: 10px; vertical-align: 3px;
