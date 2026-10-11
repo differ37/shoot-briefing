@@ -4,7 +4,7 @@ import { avatarHtml, displayName } from './profiles.js';
 import { GitHubStore, LocalStore, PrefixedStore, originals } from './storage.js';
 import { Library, versionKeyFromName } from './library.js';
 import { analyzeTimetable, compareVersions, matchConti, testKey } from './claude.js';
-import { makeReducedPdf, openPdf, pdfToAnalysisImages, pdfThumbnail, pickPages, renderPagesInto } from './pdf.js';
+import { imagesToPdf, isImageFile, isPdfFile, makeReducedPdf, openPdf, pdfToAnalysisImages, pdfThumbnail, pickPages, renderPagesInto } from './pdf.js';
 import { installTypeset } from './typeset.js';
 import { annotatedImages, extractConti, mapFromAI, matchSchedule, renderRegion, thumbRenderer } from './conti.js';
 import { computeMarks } from './diff.js';
@@ -387,7 +387,7 @@ async function renderHome(space) {
     <section class="hero">
       <p class="eyebrow">CALL SHEET BRIEFING</p>
       <h1>예정된 촬영이 없어요.</h1>
-      <p class="lead">${canUpload(space) ? '타임테이블 PDF를 올리면<br>브리핑이 만들어집니다.' : `${h(spaceName(space))}님이 타임테이블을 올리면<br>여기에 나타나요.`}</p>
+      <p class="lead">${canUpload(space) ? '타임테이블 PDF나 사진을 올리면<br>브리핑이 만들어집니다.' : `${h(spaceName(space))}님이 타임테이블을 올리면<br>여기에 나타나요.`}</p>
     </section>`;
   }
 
@@ -429,8 +429,8 @@ async function renderHome(space) {
     ${canUpload(space) ? `<section class="section">
       <div class="dropzone" data-action="upload" id="dropzone">
         ${icon.upload}
-        <strong>타임테이블 PDF 올리기</strong>
-        <span>여기로 끌어다 놓거나 눌러서 선택하세요.<br>여러 버전을 한 번에 올려도 돼요.</span>
+        <strong>타임테이블 올리기</strong>
+        <span>PDF나 사진·캡처를 끌어다 놓거나 눌러서 선택하세요.<br>PDF는 여러 버전을 한 번에, 사진은 여러 장을 고르면 한 버전으로 묶여요.</span>
       </div>
     </section>` : ''}
     ${past.length ? `<section class="section">
@@ -1656,7 +1656,7 @@ function renderSettings() {
 // ---------------------------------------------------------------- 업로드
 const picker = document.createElement('input');
 picker.type = 'file';
-picker.accept = 'application/pdf,.pdf';
+picker.accept = 'application/pdf,.pdf,image/*';
 picker.multiple = true;
 let pickerProject = null;
 picker.addEventListener('change', () => {
@@ -1679,13 +1679,13 @@ function bindDrop(el) {
   ['dragleave', 'drop'].forEach((ev) => el.addEventListener(ev, () => el.classList.remove('over')));
   el.addEventListener('drop', (e) => {
     e.preventDefault();
-    const files = [...e.dataTransfer.files].filter((f) => /pdf$/i.test(f.type) || /\.pdf$/i.test(f.name));
+    const files = [...e.dataTransfer.files].filter((f) => isPdfFile(f) || isImageFile(f));
     if (files.length) uploadFiles(files, null, currentSpace);
   });
 }
 
 const STEPS = [
-  ['read', 'PDF 읽기'],
+  ['read', '파일 읽기'],
   ['render', '페이지를 고해상도 이미지로 변환'],
   ['analyze', 'Claude가 타임테이블 분석'],
   ['diff', '이전 버전과 비교'],
@@ -1757,15 +1757,22 @@ async function uploadFilesInner(files, projectId, space) {
   const lib = await getLibrary(space).catch((e) => { sheet.title('저장소 연결 실패'); sheet.detail(e.message); return null; });
   if (!lib) { sheet.actions('<button class="btn" data-close>닫기</button>').querySelector('[data-close]').onclick = sheet.close; return; }
 
+  // 사진은 한꺼번에 고른 것을 한 버전(여러 쪽)으로 묶는다 — 카톡으로 받은 타임테이블 캡처 여러 장 등
+  const photos = files.filter((f) => !isPdfFile(f) && isImageFile(f))
+    .sort((x, y) => x.name.localeCompare(y.name, undefined, { numeric: true }) || x.lastModified - y.lastModified);
+  files = files.filter(isPdfFile);
+  if (photos.length) files.push({ photos, name: photos[0].name.replace(/\.[^.]+$/, '') + '.pdf', lastModified: photos[0].lastModified });
+
   // 버전 순서대로 처리해야 변경사항 비교가 자연스럽다
   files.sort((x, y) => versionKeyFromName(x.name).localeCompare(versionKeyFromName(y.name)) || x.lastModified - y.lastModified);
 
   for (let i = 0; i < files.length; i++) {
-    const file = files[i];
-    sheet.file(file.name, i, files.length);
+    let file = files[i];
+    sheet.file(file.photos?.length > 1 ? `${file.photos[0].name} 외 ${file.photos.length - 1}장` : file.photos?.[0].name || file.name, i, files.length);
     sheet.title('분석 중');
     try {
       sheet.step('read');
+      if (file.photos) file = new File([await imagesToPdf(file.photos, (t) => sheet.detail(t))], file.name, { type: 'application/pdf', lastModified: file.lastModified });
       // Uint8Array로 넘겨 복사 없이 연다 (165MB짜리 PPM 자료도 메모리를 두 배로 쓰지 않게)
       const pdf = await openPdf(new Uint8Array(await file.arrayBuffer()));
       const { pages, picked, found } = await pickPages(pdf);

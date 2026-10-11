@@ -136,3 +136,41 @@ export async function makeReducedPdf(pdf, pages, onProgress) {
   }
   return new Blob([await out.save()], { type: 'application/pdf' });
 }
+
+export const isImageFile = (f) => /^image\//i.test(f.type) || /\.(jpe?g|png|heic|heif|webp|gif|bmp)$/i.test(f.name);
+export const isPdfFile = (f) => /pdf$/i.test(f.type) || /\.pdf$/i.test(f.name);
+
+/**
+ * 사진·스크린샷(여러 장이면 한 장이 한 쪽)을 PDF 하나로 묶는다 → 그 뒤는 PDF와 똑같이 분석·저장.
+ * <img>로 읽어서 아이폰 HEIC도 사파리가 풀어 준다. 너무 큰 사진은 약 12MP로 줄인다(휴대폰 메모리).
+ */
+export async function imagesToPdf(files, onProgress) {
+  const { PDFDocument } = await import('pdf-lib');
+  const out = await PDFDocument.create();
+  for (const [n, file] of files.entries()) {
+    onProgress?.(`사진을 PDF로 바꾸는 중 (${n + 1}/${files.length})`);
+    const url = URL.createObjectURL(file);
+    try {
+      const img = new Image();
+      img.src = url;
+      await img.decode().catch(() => { throw new Error(`${file.name}: 사진을 열지 못했어요`); });
+      const s = Math.min(1, Math.sqrt(12e6 / (img.naturalWidth * img.naturalHeight)));
+      const c = document.createElement('canvas');
+      c.width = Math.round(img.naturalWidth * s);
+      c.height = Math.round(img.naturalHeight * s);
+      const ctx = c.getContext('2d');
+      ctx.fillStyle = '#fff'; // 투명 PNG 배경
+      ctx.fillRect(0, 0, c.width, c.height);
+      ctx.drawImage(img, 0, 0, c.width, c.height);
+      const blob = await new Promise((res) => c.toBlob(res, 'image/jpeg', 0.9));
+      c.width = c.height = 0;
+      const jpg = await out.embedJpg(new Uint8Array(await blob.arrayBuffer()));
+      // 1px = 0.5pt (150dpi 정도) — 쪽 크기는 분석·콘티 좌표에 영향 없음
+      const pg = out.addPage([jpg.width / 2, jpg.height / 2]);
+      pg.drawImage(jpg, { x: 0, y: 0, width: jpg.width / 2, height: jpg.height / 2 });
+    } finally {
+      URL.revokeObjectURL(url);
+    }
+  }
+  return new Blob([await out.save()], { type: 'application/pdf' });
+}
