@@ -5,7 +5,7 @@
 // 2) 각 그림을 세로 위치가 가장 가까운 줄에 붙인 다음
 // 3) Claude가 정리한 진행표(schedule)의 시작 시간을 PDF 줄에 순서대로 맞춘다.
 // 그림은 페이지 전체를 렌더링하지 않고 그 영역만 잘라 렌더링한다(휴대폰 메모리 절약).
-import * as pdfjsLib from 'pdfjs-dist';
+import * as pdfjsLib from 'pdfjs-dist/legacy/build/pdf.mjs';
 
 // "06:30" 또는 "06:30 ~ 08:00" 같은 범위(시작 시간을 쓴다)
 const TIME_RE = /^(\d{1,2}):(\d{2})(?:\s*[~\-–]\s*\d{1,2}:\d{2})?$/;

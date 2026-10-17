@@ -100,6 +100,8 @@ npm run build
 
 ## 주의할 점
 
+- pdf.js는 **legacy 빌드**(`pdfjs-dist/legacy/build/pdf.mjs`, 워커도 legacy)를 쓴다 — 기본 빌드는 `Map.getOrInsertComputed`·`Math.sumPrecise` 등
+  최신 기능을 그냥 써서 안드로이드(신훈 폰) 등 조금 오래된 브라우저에서 "getOrInsertComputed is not a function"으로 멈췄다(2026-10-17).
 - pdf.js `page.render`는 `intent: 'print'` 유지(기본값은 requestAnimationFrame을 써서 백그라운드 탭에서 멈춤).
   pdf.js v6에는 `pdf.destroy()`가 없다 — 메모리 해제는 `pdf.loadingTask.destroy()`.
 - 큰 파일은 `openPdf(new Uint8Array(buf))`로 넘겨 복사 없이 연다(ArrayBuffer를 넘기면 복사본을 만든다).
@@ -117,7 +119,7 @@ npm run build
   - 끝나면 `public/__test/`, .gitignore 줄, IndexedDB(`shoot-briefing`, `shoot-briefing-originals`)·localStorage 테스트 데이터를 지우고 dev 서버를 끈다.
 - **이 컴퓨터에는 Claude API 키가 없다**(`ant` 없음, 환경변수 없음) — 실제 Claude 호출(분석·콘티 맞추기)은 사용자가 휴대폰에서 확인해야 한다.
   로그인 비밀번호가 필요한 흐름(실제 로그인, 사용자 관리)도 직접 테스트할 수 없다.
-- 배포 후 확인을 부탁할 때는 `?v=N`을 붙인 주소를 준다(GitHub Pages가 HTML을 10분 캐시). **지금까지 v=17까지 썼다** → 다음은 v=18.
+- 배포 후 확인을 부탁할 때는 `?v=N`을 붙인 주소를 준다(GitHub Pages가 HTML을 10분 캐시). **지금까지 v=18까지 썼다** → 다음은 v=19.
 - 사용자는 모바일(아이폰)로 주로 본다. 새 화면은 390px 폭에서 줄바꿈·넘침을 꼭 확인할 것.
 - push(=배포)는 사용자가 "배포해줘"라고 할 때. 사용자가 휴대폰으로 테스트하며 버그를 알려주는 경우엔 고친 뒤 바로 배포해 왔다.
 - 사용자에게는 한국어로, 쉬운 말로 설명한다(개발 용어 최소화). 커밋 메시지는 한국어.
@@ -151,6 +153,7 @@ npm run build
 - 보안 점검 후 사용자 요청으로 **효권(hk)·신훈(sh) 계정 잠금**(v=17). 로그인 화면 안내 문구가 숨은 폼 안에 있어 안 보이던 것도 고침.
   멤버 토큰 폐기·Claude 키 교체는 사용자가 직접 해야 함
 - 2026-10-17 사용자 요청으로 두 계정 **잠금 해제** (잠금 기능은 그대로 남음)
+- 신훈 폰(안드로이드)에서 PDF 변환 단계 오류 `getOrInsertComputed is not a function` → pdf.js legacy 빌드로 교체(v=18). 기능을 지운 흉내 환경에서 오류 재현·해결 확인, 실제 폰은 미확인
 
 ## 확인 대기 / 다음 후보
 
