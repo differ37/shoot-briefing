@@ -6,13 +6,11 @@
     },
     {
       "id": "hk",
-      "role": "member",
-      "locked": true
+      "role": "member"
     },
     {
       "id": "sh",
-      "role": "member",
-      "locked": true
+      "role": "member"
     }
   ]
 }
