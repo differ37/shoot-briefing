@@ -538,8 +538,8 @@ main { min-height: calc(100vh - 140px); }
 .sr-body { flex: 1; min-width: 0; display: flex; flex-direction: column; }
 .sr-body strong { font-size: 16px; font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sr-sub { font-size: 13px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.sr-call { font-size: 13px; color: var(--text); font-weight: 600; display: flex; gap: 4px; align-items: center; margin-top: 2px; }
-.sr-call svg { color: var(--accent); }
+.sr-call { font-size: 13px; color: var(--text); font-weight: 600; display: block; margin-top: 2px; line-height: 1.45; }
+.sr-call svg { color: var(--accent); width: 14px; height: 14px; vertical-align: -2px; margin-right: 4px; }
 .sr-side { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; flex: none; }
 .sr-dday { font-size: 13px; font-weight: 800; color: var(--accent); }
 .sr-chg { font-size: 11px; font-weight: 700; color: var(--warn); background: var(--warn-bg); padding: 2px 7px; border-radius: 6px; }
@@ -793,8 +793,26 @@ p, li, .stop-role, .tl-loc, .sr-sub { text-wrap: pretty; }
 .log-list b { font-size: 18px; font-weight: 800; font-variant-numeric: tabular-nums; min-width: 56px; }
 .log-list span { flex: 1; font-size: 15px; font-weight: 600; }
 .log-list svg { width: 16px; height: 16px; color: var(--faint); }
+/* 계획 ↔ 실제 비교표 */
+.lg-table { margin: 0 0 14px; }
+.lg-row { display: grid; grid-template-columns: minmax(0, 1fr) 58px 58px 70px; align-items: center; gap: 4px; padding: 6px 0; border-bottom: 1px solid var(--line); }
+.lg-row:last-child { border-bottom: 0; }
+.lg-head { font-size: 12px; font-weight: 700; color: var(--faint); padding: 0 0 6px; }
+.lg-head span:nth-child(2), .lg-head span:nth-child(3) { text-align: center; }
+.lg-label { font-size: 15px; font-weight: 600; overflow-wrap: anywhere; }
+.lg-t { height: 36px; border: 0; border-radius: 10px; background: transparent; color: var(--text); font: inherit; font-size: 16px; font-weight: 800; font-variant-numeric: tabular-nums; text-align: center; display: flex; align-items: center; justify-content: center; cursor: pointer; padding: 0; }
+.lg-t.plan { color: var(--muted); font-weight: 700; }
+.lg-t.log { background: var(--accent-soft); color: var(--accent); }
+.lg-t.empty { color: var(--faint); font-weight: 500; }
+.lg-t.now { border: 1.5px dashed color-mix(in srgb, var(--accent) 55%, transparent); color: var(--accent); font-size: 13px; font-weight: 700; }
+.lg-t:disabled { cursor: default; }
+.lg-gap { font-size: 12px; font-weight: 700; text-align: right; white-space: nowrap; }
+.lg-gap.late { color: var(--danger); }
+.lg-gap.early, .lg-gap.ok { color: var(--ok); }
+.past-box .sr-dday { color: var(--muted); }
 .log-actions { display: flex; gap: 8px; }
-.log-actions .btn { flex: 1; justify-content: center; }
+.log-actions .btn { flex: 1; justify-content: center; white-space: nowrap; padding-left: 10px; padding-right: 10px; }
+.chain li.planned b { opacity: .6; }
 .log-presets { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 4px; }
 .log-presets button { border: 0; border-radius: 999px; padding: 8px 12px; font: inherit; font-size: 13px; font-weight: 700; background: var(--bg-alt); color: var(--text); cursor: pointer; }
 .log-presets button:active { background: var(--accent-soft); color: var(--accent); }

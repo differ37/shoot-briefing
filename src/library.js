@@ -34,6 +34,31 @@ function hash(s) {
   return (h >>> 0).toString(36);
 }
 
+/**
+ * 타임테이블에 연도가 없으면 Claude가 엉뚱한 해(예: 요일이 맞는 2020년)를 고르는 일이 있다.
+ * 오늘에서 200일 넘게 떨어진 날짜는 같은 월·일로 작년·올해·내년 중 요일이 맞고 오늘에 가장 가까운 해로 바꾼다.
+ */
+export function fixShootDate(date, weekday) {
+  const m = String(date || '').match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!m) return date;
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  const at = (y) => new Date(`${y}-${m[2]}-${m[3]}T00:00:00`);
+  const dist = (d) => Math.abs(d - today) / 86400000;
+  if (dist(at(m[1])) <= 200) return date;
+  const y0 = today.getFullYear();
+  let cands = [y0 - 1, y0, y0 + 1].filter((y) => at(y).getMonth() + 1 === Number(m[2])); // 2/29 같은 없는 날짜 제외
+  const wd = (y) => '일월화수목금토'[at(y).getDay()];
+  if (weekday && cands.some((y) => wd(y) === weekday)) cands = cands.filter((y) => wd(y) === weekday);
+  if (!cands.length) return date;
+  const best = cands.sort((a, b) => dist(at(a)) - dist(at(b)))[0];
+  return `${best}-${m[2]}-${m[3]}`;
+}
+
+function fixProduction(prod) {
+  if (prod?.shoot_date) prod.shoot_date = fixShootDate(prod.shoot_date, prod.weekday);
+  return prod;
+}
+
 export function compareVersions(a, b) {
   if (a.sortKey && b.sortKey && a.sortKey !== b.sortKey) return a.sortKey < b.sortKey ? -1 : 1;
   return a.uploadedAt < b.uploadedAt ? -1 : a.uploadedAt > b.uploadedAt ? 1 : 0;
@@ -49,6 +74,7 @@ export class Library {
   async load() {
     const text = await this.store.getText(INDEX);
     this.index = text ? JSON.parse(text) : { version: 1, projects: [] };
+    for (const p of this.index.projects) if (!p.dateFixed && p.date) p.date = fixShootDate(p.date, p.weekday);
     return this.index;
   }
 
@@ -87,7 +113,11 @@ export class Library {
   async getVersion(pid, vid) {
     const key = `${pid}/${vid}`;
     if (!this.cache.has(key)) {
-      this.cache.set(key, this.store.getText(`projects/${pid}/${vid}.json`).then((t) => (t ? JSON.parse(t) : null)));
+      this.cache.set(key, this.store.getText(`projects/${pid}/${vid}.json`).then((t) => {
+        const rec = t ? JSON.parse(t) : null;
+        fixProduction(rec?.analysis?.production);
+        return rec;
+      }));
     }
     return this.cache.get(key);
   }
@@ -112,6 +142,7 @@ export class Library {
    */
   async addVersion({ fileName, pdfBlob, thumbBlob, analysis, projectId, compare, onStep, extra = {} }) {
     await this.load(); // 다른 기기에서 올린 내용과 충돌하지 않도록 최신 목록부터
+    fixProduction(analysis.production);
     let project = projectId ? this.project(projectId) : this.guessProject(fileName, analysis);
     const prod = analysis.production || {};
     if (!project) {
@@ -198,15 +229,19 @@ export class Library {
     return { project, meta };
   }
 
-  /** 내 시간 기록 [{id, label, time}] (버전과 무관하게 촬영 단위로 저장). 예전 prep(장비집 집합/출발)은 여기로 옮긴다 */
-  async setLog(pid, entries) {
+  /**
+   * 내 시간 기록 [{id, label, time}] (버전과 무관하게 촬영 단위로 저장).
+   * kind 'log' = 실제로 한 시간(project.log), 'plan' = 미리 계획한 시간(project.plan). 예전 prep(장비집 집합/출발)은 log로 옮긴다
+   */
+  async setLog(pid, entries, kind = 'log') {
     await this.load();
     const project = this.project(pid);
     if (!project) throw new Error('촬영을 찾을 수 없어요.');
-    if (entries.length) project.log = entries;
-    else delete project.log;
-    delete project.prep;
-    await this.saveIndex(`시간 기록: ${project.title}`);
+    const key = kind === 'plan' ? 'plan' : 'log';
+    if (entries.length) project[key] = entries;
+    else delete project[key];
+    if (key === 'log') delete project.prep;
+    await this.saveIndex(`${key === 'plan' ? '계획 시간' : '시간 기록'}: ${project.title}`);
   }
 
   /**

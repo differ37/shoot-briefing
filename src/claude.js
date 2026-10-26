@@ -98,6 +98,7 @@ const SYSTEM_BRIEFING = `당신은 광고·영상 촬영 현장의 "촬영팀 �
 - 문서에 실제로 적힌 내용만 추출하세요. 추측으로 채우지 말고, 없는 값은 빈 문자열로 두세요.
 - 주소·전화번호·시간은 한 글자도 틀리지 않게 확대 타일을 보고 정확히 옮기세요.
 - 촬영팀(카메라팀) 도착 시간과 장소가 기사에게 가장 중요합니다. 로케이션 이동(촬영지 변경)이 있으면 반드시 moves에 넣으세요.
+- 촬영일에 연도가 적혀 있지 않으면 "오늘" 날짜에 가장 가까운 해(보통 올해, 연말·연초면 다음 해)로 정하세요. 요일만 보고 몇 년 전 날짜를 고르지 마세요.
 - 빨간 글씨, 별표(*), 강조 박스로 표시된 주의사항은 checks에 넣으세요.
 - 모든 텍스트는 한국어로 쓰세요. 휴대폰에서 읽기 쉽게 한 문장은 짧게 끊고, 긴 내용은 여러 문장으로 나눠 줄바꿈하세요.`;
 
@@ -105,6 +106,11 @@ const SYSTEM_DIFF = `당신은 촬영팀 장비차량 기사를 돕는 비서입
 같은 촬영의 타임테이블 분석 결과 두 개(이전 버전, 새 버전)를 비교해 실제로 바뀐 점만 정리하세요.
 표현만 달라지고 의미가 같은 것은 변경으로 치지 마세요.
 기사의 운행에 영향을 주는 변경(도착 시간, 장소/주소, 로케이션 이동, 종료 시간)은 importance를 high로 표시하세요.`;
+
+const today = () => {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')} (${'일월화수목금토'[d.getDay()]})`;
+};
 
 function client(apiKey) {
   return new Anthropic({ apiKey, dangerouslyAllowBrowser: true, maxRetries: 2 });
@@ -158,7 +164,7 @@ export async function analyzeTimetable(apiKey, { images, fileName, onText }) {
   }
   content.push({
     type: 'text',
-    text: `파일명: ${fileName}\n위 타임테이블을 장비차량 기사 관점에서 분석해 주세요.`,
+    text: `파일명: ${fileName}\n오늘: ${today()}\n위 타임테이블을 장비차량 기사 관점에서 분석해 주세요.`,
   });
   return runStructured(apiKey, {
     system: SYSTEM_BRIEFING,

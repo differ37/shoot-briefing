@@ -40,13 +40,15 @@ npm run build
   GitHub 100MB 제한·휴대폰 메모리 때문.
   `imagesToPdf`: 사진·캡처 업로드 — 한 번에 고른 사진들을 이름순으로 한 장=한 쪽인 PDF로 묶어(≤12MP, JPEG) 그 뒤는 PDF와 똑같이 처리.
   (PDF는 파일마다 한 버전, 사진은 묶어서 한 버전. 텍스트 레이어가 없어 규칙 방식 콘티·`pickPages` 시간 찾기는 안 됨) 이때 콘티용 그림 위치는 원본에서 미리 뽑아 버전 JSON의 `conti.rows`/`conti.boxes`에, 줄인 정보는 `reduced`에 저장.
+  **모든 업로드의 원본을 올린 기기에 보관**하고, 다른 기기에서도 한 번 열면(저장소에서 받으면) 그 기기에 보관 → 브리핑 제목 아래 "원본 PDF" 버튼으로 바로 열림(`openOriginal`).
   원본 자체는 `storage.js`의 `originals`(IndexedDB `shoot-briefing-originals`, 키 `<공간>/<pid>/<vid>`)에 올린 기기에만 보관 →
   원본 칸 "원본 PDF 열기(전체)". 없는 기기는 "원본 파일 선택"으로 받은 파일을 골라 보관. 로그아웃·버전 삭제 시 지움.
   (GitHub Releases는 다운로드 리다이렉트·업로드가 CORS를 막아 브라우저에서 못 씀 — 2026-10-06 확인)
 - `src/library.js` — 촬영(project) ⊃ 버전 데이터 관리, 버전 순서(파일명 `v0930_01`), 변경 재계산, `saveVersion`(버전 JSON 고쳐 저장).
-  내 시간 기록 `project.log=[{id,label,time}]`(예전 `project.prep` 장비집 집합/출발은 `logOf()`가 기록으로 바꿔 보여주고 저장 시 log로 옮김),
+  내 시간 기록: 실제 `project.log=[{id,label,time}]` + 계획 `project.plan`(같은 모양, `setLog(pid, entries, 'plan')`) — 화면에선 이름으로 짝지어 계획/실제/차이 표(`logRows`, 시간순, 첫 기록보다 6시간 넘게 이른 시간은 다음날), 요약·업무 공유는 실제 우선·없으면 계획(`effLog`). (예전 `project.prep` 장비집 집합/출발은 `logOf()`가 기록으로 바꿔 보여주고 저장 시 log로 옮김),
   업무 공유에 쓴 값 `project.share={title,date,route,start,end,fee}`,
   촬영일 직접 고치기 `setDate(pid, date|null)` → `project.dateFixed=true`면 새 버전이 와도 날짜 유지(null이면 최신 버전 타임테이블 날짜로 되돌림, 촬영 id는 안 바꿈)
+  `fixShootDate`: 타임테이블에 연도가 없으면 Claude가 요일만 맞춰 엉뚱한 해(2020)를 고른 적이 있다 → 오늘에서 200일 넘게 떨어진 촬영일은 작년·올해·내년 중 요일이 맞고 가장 가까운 해로 바꾼다(목록 load·버전 읽기·저장 때 자동). 분석 프롬프트에도 오늘 날짜를 넘김.
 - `src/storage.js` — `GitHubStore`(Contents API, 1MB 넘으면 raw로 읽음) / `LocalStore`(IndexedDB) / `PrefixedStore`(사람별 폴더) / `originals`(큰 원본 기기 보관)
 - `src/vault.js` — 아이디/비밀번호 로그인(서버 없음), 공개 계정 목록, `encryptUser`/`decryptUser`(큰 데이터는 base64 변환을 나눠서)
 - `src/diff.js` — 이전 버전 대비 항목별 NEW/변경 배지
@@ -119,7 +121,7 @@ npm run build
   - 끝나면 `public/__test/`, .gitignore 줄, IndexedDB(`shoot-briefing`, `shoot-briefing-originals`)·localStorage 테스트 데이터를 지우고 dev 서버를 끈다.
 - **이 컴퓨터에는 Claude API 키가 없다**(`ant` 없음, 환경변수 없음) — 실제 Claude 호출(분석·콘티 맞추기)은 사용자가 휴대폰에서 확인해야 한다.
   로그인 비밀번호가 필요한 흐름(실제 로그인, 사용자 관리)도 직접 테스트할 수 없다.
-- 배포 후 확인을 부탁할 때는 `?v=N`을 붙인 주소를 준다(GitHub Pages가 HTML을 10분 캐시). **지금까지 v=18까지 썼다** → 다음은 v=19.
+- 배포 후 확인을 부탁할 때는 `?v=N`을 붙인 주소를 준다(GitHub Pages가 HTML을 10분 캐시). **지금까지 v=19까지 썼다** → 다음은 v=20.
 - 사용자는 모바일(아이폰)로 주로 본다. 새 화면은 390px 폭에서 줄바꿈·넘침을 꼭 확인할 것.
 - push(=배포)는 사용자가 "배포해줘"라고 할 때. 사용자가 휴대폰으로 테스트하며 버그를 알려주는 경우엔 고친 뒤 바로 배포해 왔다.
 - 사용자에게는 한국어로, 쉬운 말로 설명한다(개발 용어 최소화). 커밋 메시지는 한국어.
@@ -155,7 +157,17 @@ npm run build
 - 2026-10-17 사용자 요청으로 두 계정 **잠금 해제** (잠금 기능은 그대로 남음)
 - 신훈 폰(안드로이드)에서 PDF 변환 단계 오류 `getOrInsertComputed is not a function` → pdf.js legacy 빌드로 교체(v=18). 기능을 지운 흉내 환경에서 오류 재현·해결 확인, 실제 폰은 미확인
 
+### 2026-10-26
+- EXO 10/30 타임테이블이 2020년으로 저장돼 '지난 촬영'·D+2187로 보이던 문제 → `fixShootDate`로 자동 보정(데이터 저장소의 index.json·폴더 이름 `2020-10-30-…`은 그대로, 다음 저장 때 날짜만 고쳐짐).
+  지난 촬영의 D-day는 "N일 전"(60일 넘으면 숨김). 지난 촬영 목록의 도착 줄이 세로로 쪼개지던 것(flex) 고침.
+- 시간 기록을 계획 ↔ 실제 비교표로. 홈·도착 카드 요약은 실제가 없으면 "○○ 예정"(흐리게).
+- 원본 PDF 기기 보관·바로 열기. "페이지 보기" 버튼이 await 뒤 `e.currentTarget`이 비어 오류 토스트를 내던 것 고침.
+- 로컬 테스트는 `puppeteer-core`(스크래치 폴더에 설치)로 Chrome을 390px 모바일 화면으로 띄워 확인했다(seed 페이지로 IndexedDB·localStorage 채움). (v=19 배포)
+
 ## 확인 대기 / 다음 후보
+
+- [ ] 계획/실제 시간 기록 표가 아이폰에서 쓰기 편한지
+- [ ] 원본 PDF 버튼이 아이폰에서 바로 열리는지 (기기 보관은 로그아웃하면 지워짐)
 
 - [ ] 잠금 해제한 효권·신훈이 실제로 로그인되는지 (멤버 토큰은 폐기하지 않았음 — 사용자 확인 2026-10-17, 그대로 쓰면 됨)
 

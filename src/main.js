@@ -105,7 +105,8 @@ function dday(dateStr) {
   if (isNaN(d)) return '';
   const today = new Date(); today.setHours(0, 0, 0, 0);
   const diff = Math.round((d - today) / 86400000);
-  return diff === 0 ? 'D-DAY' : diff > 0 ? `D-${diff}` : `D+${-diff}`;
+  // 지난 촬영은 "D+12" 대신 "12일 전", 두 달 넘게 지났으면 표시하지 않는다
+  return diff === 0 ? 'D-DAY' : diff > 0 ? `D-${diff}` : -diff <= 60 ? `${-diff}일 전` : '';
 }
 
 function prettyDate(dateStr, weekday) {
@@ -154,14 +155,40 @@ const logOf = (project) => project.log || [
   ...(project.prep?.gather ? [{ id: 'g', label: '장비집 집합', time: project.prep.gather }] : []),
   ...(project.prep?.depart ? [{ id: 'd', label: '장비집 출발', time: project.prep.depart }] : []),
 ];
+const toMin = (t) => { const m = String(t || '').match(/(\d{1,2}):(\d{2})/); return m ? Number(m[1]) * 60 + Number(m[2]) : null; };
+const planOf = (project) => project.plan || [];
+const normLabel = (s) => String(s || '').replace(/\s+/g, '');
+// 계획과 실제 기록을 이름으로 짝지어 한 줄씩: [{label, plan, log}] (같은 이름이 여러 번이면 순서대로 짝)
+const logRows = (project) => {
+  const rows = planOf(project).map((e, i) => ({ label: e.label, plan: e, planIndex: i, log: null, logIndex: -1 }));
+  logOf(project).forEach((e, i) => {
+    const r = rows.find((x) => !x.log && x.plan && normLabel(x.label) === normLabel(e.label));
+    if (r) Object.assign(r, { log: e, logIndex: i });
+    else rows.push({ label: e.label, plan: null, planIndex: -1, log: e, logIndex: i });
+  });
+  // 시간 순으로 (첫 기록보다 6시간 넘게 이른 시간은 자정 넘긴 다음날로 본다)
+  const base = toMin((planOf(project)[0] || logOf(project)[0])?.time);
+  const key = (r) => { const t = toMin(r.log?.time || r.plan?.time); return t == null ? 1e9 : base != null && t < base - 360 ? t + 1440 : t; };
+  return rows.map((r, i) => [key(r), i, r]).sort((a, b) => a[0] - b[0] || a[1] - b[1]).map((x) => x[2]);
+};
+// 실제 기록이 있으면 실제, 없으면 계획 시간 (요약·업무 공유용)
+const effLog = (project) => logRows(project).map((r) => ({ label: r.label, time: r.log?.time || r.plan?.time || '', planned: !r.log }));
+// 실제 - 계획 (분). 자정 근처는 가까운 쪽으로
+const lateMin = (plan, actual) => {
+  const p = toMin(plan), a = toMin(actual);
+  if (p == null || a == null) return null;
+  let d = a - p;
+  if (d > 720) d -= 1440; else if (d < -720) d += 1440;
+  return d;
+};
 // 촬영팀 도착 전까지의 기록 → 촬영팀 도착 (홈·도착 카드용 요약)
 const logChain = (entries, callTime, cls = '') => {
   const before = entries.filter((e) => e.time && (!callTime || !/^\d{1,2}:\d{2}$/.test(callTime) || e.time <= callTime)).slice(-3);
   if (!before.length) return '';
-  const steps = [...before.map((e) => [e.label, e.time]), ['촬영팀 도착', callTime || '—']];
-  return `<ol class="chain ${cls}">${steps.map(([label, t], i) => `<li class="${i === steps.length - 1 ? 'arrive' : ''}"><span>${h(label)}</span><b>${h(t)}</b></li>`).join('')}</ol>`;
+  const steps = [...before.map((e) => [e.planned ? `${e.label} 예정` : e.label, e.time, e.planned]), ['촬영팀 도착', callTime || '—']];
+  return `<ol class="chain ${cls}">${steps.map(([label, t, planned], i) => `<li class="${i === steps.length - 1 ? 'arrive' : planned ? 'planned' : ''}"><span>${h(label)}</span><b>${h(t)}</b></li>`).join('')}</ol>`;
 };
-const firstLog = (p) => logOf(p)[0];
+const firstLog = (p) => effLog(p)[0];
 
 const isPlaceholderPhone = (p) => !p || /0000-?0000/.test(p);
 const telHref = (p) => 'tel:' + String(p).replace(/[^\d+]/g, '');
@@ -394,7 +421,7 @@ async function renderHome(space) {
             <span class="call-time">${h(a.my_call?.time || '—')}</span>
             <span class="call-place">${icon.pin}${h(a.my_call?.location_name || '')}</span>
           </div>
-          ${logChain(logOf(next), a.my_call?.time, 'on-dark')}
+          ${logChain(effLog(next), a.my_call?.time, 'on-dark')}
           ${a.headline ? flow(a.headline, 'on-dark') : ''}
           ${latest.highChangeCount ? `<p class="hero-alert">${icon.alert} 최신 ${h(latest.label)} · 중요한 변경 ${latest.highChangeCount}건</p>` : ''}
           <span class="call-go">브리핑 보기 ${icon.chevron}</span>
@@ -534,7 +561,7 @@ async function renderProject(space, pid, vid) {
     <div class="hero-text">
       <p class="eyebrow">${h([prod.production_company, prod.shoot_type].filter(Boolean).join(' · ') || 'CALL SHEET')}</p>
       <h1>${h(prod.project_title || project.title)}</h1>
-      <p class="lead">${canEdit(space) ? `<button type="button" class="date-btn" data-date-edit title="촬영일 고치기">${h(prettyDate(shootDate, shootWeekday))}</button>` : h(prettyDate(shootDate, shootWeekday))} <span class="dday">${h(dday(shootDate))}</span>${project.dateFixed ? '<span class="date-fixed">직접 고침</span>' : ''}${canEdit(space) ? `<button type="button" class="mini-btn" data-log-add>${icon.clock}시간 기록</button>` : ''}</p>
+      <p class="lead">${canEdit(space) ? `<button type="button" class="date-btn" data-date-edit title="촬영일 고치기">${h(prettyDate(shootDate, shootWeekday))}</button>` : h(prettyDate(shootDate, shootWeekday))} <span class="dday">${h(dday(shootDate))}</span>${project.dateFixed ? '<span class="date-fixed">직접 고침</span>' : ''}${canEdit(space) ? `<button type="button" class="mini-btn" data-log-add>${icon.clock}시간 기록</button>` : ''}<button type="button" class="mini-btn" data-open-orig>${icon.doc}원본 PDF</button></p>
       <div class="ver-line">
         <span class="pill ${isLatest ? 'latest' : 'old'}">${isLatest ? '최신' : '이전 버전'} · ${h(meta.label)}</span>
         ${rec.changes ? `<span class="pill ${rec.changes.changes.length ? 'warn' : ''}">${h(rec.changes.againstLabel)} 대비 변경 ${rec.changes.changes.length}건</span>` : '<span class="pill">첫 버전</span>'}
@@ -595,7 +622,7 @@ async function renderProject(space, pid, vid) {
   <section class="section" id="sec-call">
     <div class="call-card">
       <div class="call-main">
-        ${logChain(logOf(project), mc.time, 'on-dark')}
+        ${logChain(effLog(project), mc.time, 'on-dark')}
         <span class="call-label">${icon.camera} 촬영팀 도착</span>
         <div class="call-time-xl">${h(mc.time || '—')}${marks.myCall.time ? `<span class="badge chg">변경</span><span class="before">${h(marks.myCall.time)}</span>` : ''}</div>
         <div class="call-where">
@@ -740,8 +767,8 @@ async function renderProject(space, pid, vid) {
         <div class="row-gap" id="origActions"><span class="muted small">원본 확인 중…</span></div>
         <input type="file" accept="application/pdf,.pdf" id="origPick" hidden>
       </div>` : ''}
-      <div class="row-gap"><button class="btn ${rec.reduced ? 'ghost' : ''}" id="showPdf">${icon.doc} ${rec.reduced ? '분석한 페이지 보기' : '원본 페이지 보기'}</button><button class="btn ghost" id="openPdf">새 탭에서 PDF 열기</button></div>
-      <p class="muted small">${h(meta.fileName)}</p>
+      <div class="row-gap">${rec.reduced ? '' : `<button class="btn" id="openPdf">${icon.doc} 원본 PDF 열기</button>`}<button class="btn ghost" id="showPdf">${icon.doc} ${rec.reduced ? '분석한 페이지 보기' : '페이지 펼쳐 보기'}</button></div>
+      <p class="muted small">${h(meta.fileName)}${rec.reduced ? '' : ' <span class="orig-local" id="origLocal" hidden>· 이 기기에 있음 (바로 열려요)</span>'}</p>
       <div id="pdfPages" class="pdf-pages"></div>
     </div>
   </section>
@@ -763,17 +790,34 @@ async function renderProject(space, pid, vid) {
     </ol>
   </section>`;
 
-  // --- 내 시간 기록 + 업무 공유
-  const entries = logOf(project);
-  const logHtml = canEdit(space) || entries.length ? `
+  // --- 내 시간 기록 (계획 ↔ 실제) + 업무 공유
+  const rows = logRows(project);
+  const edit = canEdit(space);
+  const gap = (r) => {
+    const d = r.plan && r.log ? lateMin(r.plan.time, r.log.time) : null;
+    if (d == null) return '<span class="lg-gap"></span>';
+    if (d === 0) return '<span class="lg-gap ok">정시</span>';
+    return `<span class="lg-gap ${d > 0 ? 'late' : 'early'}">${Math.abs(d)}분 ${d > 0 ? '늦음' : '일찍'}</span>`;
+  };
+  const cell = (r, kind) => {
+    const e = kind === 'plan' ? r.plan : r.log;
+    const i = kind === 'plan' ? r.planIndex : r.logIndex;
+    if (e) return `<button type="button" class="lg-t ${kind}" ${edit ? `data-log-edit="${kind}:${i}"` : 'disabled'}>${h(e.time)}</button>`;
+    if (kind === 'log' && edit) return `<button type="button" class="lg-t now" data-log-now="${h(r.label)}">기록</button>`;
+    if (kind === 'plan' && edit) return `<button type="button" class="lg-t empty" data-plan-for="${h(r.label)}">—</button>`;
+    return '<span class="lg-t empty">—</span>';
+  };
+  const logHtml = edit || rows.length ? `
   <section class="section" id="sec-log">
     <div class="card log-card">
       <div class="card-head">${icon.clock}<h2>내 시간 기록</h2></div>
-      ${entries.length ? `<ol class="log-list">${entries.map((e, k) => `
-        <li><button type="button" ${canEdit(space) ? `data-log-edit="${k}"` : 'disabled'}><b>${h(e.time)}</b><span>${h(e.label)}</span>${canEdit(space) ? icon.chevron : ''}</button></li>`).join('')}</ol>`
-        : '<p class="muted small">장소를 옮길 때마다 기록을 남겨 두세요. 예: 장비집 집합, 현장 도착, 현장 종료</p>'}
+      ${rows.length ? `<div class="lg-table">
+        <div class="lg-row lg-head"><span>무엇</span><span>계획</span><span>실제</span><span></span></div>
+        ${rows.map((r) => `<div class="lg-row"><span class="lg-label">${h(r.label)}</span>${cell(r, 'plan')}${cell(r, 'log')}${gap(r)}</div>`).join('')}
+      </div>`
+        : '<p class="muted small">출발 전에 <b>계획</b>(예: 05:30 장비집 집합)을 적어 두고, 실제로 움직일 때마다 <b>실제</b> 시간을 기록하면 나란히 비교해 보여줘요.</p>'}
       <div class="log-actions">
-        ${canEdit(space) ? `<button type="button" class="btn" data-log-add>+ 기록 추가</button>` : ''}
+        ${edit ? `<button type="button" class="btn ghost" data-plan-add>+ 계획</button><button type="button" class="btn" data-log-add>+ 실제</button>` : ''}
         <button type="button" class="btn ghost" data-share-work>${icon.copy} 업무 공유</button>
       </div>
     </div>
@@ -792,7 +836,13 @@ async function renderProject(space, pid, vid) {
   hydrateThumbs(lib);
   $$('[data-log-add]').forEach((b) => b.addEventListener('click', () => openLogSheet(lib, project, null)));
   $('[data-date-edit]')?.addEventListener('click', () => openDateSheet(lib, project, shootDate, prod.shoot_date));
-  $$('[data-log-edit]').forEach((b) => b.addEventListener('click', () => openLogSheet(lib, project, Number(b.dataset.logEdit))));
+  $$('[data-log-edit]').forEach((b) => b.addEventListener('click', () => {
+    const [kind, i] = b.dataset.logEdit.split(':');
+    openLogSheet(lib, project, Number(i), kind);
+  }));
+  $('[data-plan-add]')?.addEventListener('click', () => openLogSheet(lib, project, null, 'plan'));
+  $$('[data-plan-for]').forEach((b) => b.addEventListener('click', () => openLogSheet(lib, project, null, 'plan', b.dataset.planFor)));
+  $$('[data-log-now]').forEach((b) => b.addEventListener('click', () => openLogSheet(lib, project, null, 'log', b.dataset.logNow)));
   $('[data-share-work]')?.addEventListener('click', () => openShareSheet(lib, project, a, canEdit(space)));
 
   // 이벤트
@@ -808,7 +858,42 @@ async function renderProject(space, pid, vid) {
   }));
 
   let pdfCache = null;
-  const getPdfBlob = async () => (pdfCache ||= await lib.getPdf(pid, meta.id));
+  const origKey = `${space}/${pid}/${meta.id}`;
+  const getPdfBlob = async () => {
+    if (pdfCache) return pdfCache;
+    if (!rec.reduced) pdfCache = await originals.get(origKey);
+    if (!pdfCache) {
+      pdfCache = await lib.getPdf(pid, meta.id);
+      if (!rec.reduced && pdfCache) originals.put(origKey, pdfCache).then(showOrigState).catch(() => {}); // 다음부터는 이 기기에서 바로
+    }
+    return pdfCache;
+  };
+  // 원본 PDF 새 탭으로 열기: 이 기기에 있으면 바로, 없으면 저장소에서 받는다 (큰 원본은 이 기기에만 있음)
+  const openOriginal = async () => {
+    const w = window.open('', '_blank'); // 팝업 차단을 피하려고 누른 순간 먼저 연다
+    try {
+      const blob = rec.reduced ? await originals.get(origKey) : await getPdfBlob();
+      if (!blob) {
+        w?.close();
+        toast('이 기기엔 원본이 없어요. 원본 파일을 한 번 골라 주세요');
+        document.getElementById('sec-orig')?.scrollIntoView({ behavior: 'smooth' });
+        return;
+      }
+      const url = URL.createObjectURL(new Blob([blob], { type: 'application/pdf' }));
+      if (w) w.location.href = url; else location.href = url;
+    } catch {
+      w?.close();
+      toast('PDF를 불러오지 못했어요');
+    }
+  };
+  // 원본 칸의 "이 기기에 있음" 표시
+  async function showOrigState() {
+    const el = $('#origLocal');
+    if (!el) return;
+    const has = await originals.get(origKey);
+    el.hidden = !has;
+  }
+  $$('[data-open-orig]').forEach((b) => b.addEventListener('click', openOriginal));
   // --- 진행표 콘티 그림 (원본 PDF에서 같은 시간 줄의 그림을 잘라 보여줌)
   let contiState = null; // null | 'loading' | 'done'
   const contiOn = () => { try { return localStorage.getItem(CONTI_KEY) !== 'off'; } catch { return true; } };
@@ -903,17 +988,20 @@ async function renderProject(space, pid, vid) {
   }
 
   $('#showPdf').addEventListener('click', async (e) => {
+    const btn = e.currentTarget; // await 뒤에는 e.currentTarget이 비어 있다
+    const idle = `${icon.doc} ${rec.reduced ? '분석한 페이지 보기' : '페이지 펼쳐 보기'}`;
     const box = $('#pdfPages');
-    if (box.childElementCount) { box.innerHTML = ''; e.currentTarget.innerHTML = `${icon.doc} 원본 페이지 보기`; return; }
-    e.currentTarget.textContent = '불러오는 중…';
+    if (box.childElementCount) { box.innerHTML = ''; btn.innerHTML = idle; return; }
+    btn.textContent = '불러오는 중…';
     try {
       const blob = await getPdfBlob();
-      const pdf = await openPdf(await blob.arrayBuffer());
+      const pdf = await openPdf(new Uint8Array(await blob.arrayBuffer()));
       await renderPagesInto(pdf, box, Math.min(2400, box.clientWidth * (window.devicePixelRatio || 1) * 1.5));
-      e.currentTarget.innerHTML = `${icon.doc} 원본 접기`;
+      btn.innerHTML = `${icon.doc} 페이지 접기`;
     } catch (err) {
+      console.error(err);
       toast('PDF를 불러오지 못했어요');
-      e.currentTarget.innerHTML = `${icon.doc} 원본 페이지 보기`;
+      btn.innerHTML = idle;
     }
   });
   // 큰 원본: 이 기기에 보관돼 있으면 열기, 없으면 받은 파일을 골라 보관
@@ -925,13 +1013,7 @@ async function renderProject(space, pid, vid) {
       actions.innerHTML = has
         ? `<button class="btn" id="origOpen">${icon.doc} 원본 PDF 열기 (${rec.reduced.totalPages}쪽 전체)</button>`
         : `<button class="btn" id="origChoose">${icon.upload} 원본 파일 선택</button><span class="muted small">이 기기엔 원본이 없어요. 받은 원본 파일을 한 번 고르면 이 기기에 보관돼요.</span>`;
-      $('#origOpen')?.addEventListener('click', async () => {
-        const w = window.open('', '_blank'); // 팝업 차단을 피하려고 누른 순간 먼저 연다
-        const blob = await originals.get(key);
-        if (!blob) { w?.close(); toast('원본을 찾지 못했어요'); return showState(); }
-        const url = URL.createObjectURL(blob);
-        if (w) w.location.href = url; else location.href = url;
-      });
+      $('#origOpen')?.addEventListener('click', openOriginal);
       $('#origChoose')?.addEventListener('click', () => $('#origPick').click());
     };
     $('#origPick').addEventListener('change', async (e) => {
@@ -945,12 +1027,8 @@ async function renderProject(space, pid, vid) {
     });
     showState();
   }
-  $('#openPdf').addEventListener('click', async () => {
-    const w = window.open('', '_blank');
-    const blob = await getPdfBlob();
-    const url = URL.createObjectURL(new Blob([blob], { type: 'application/pdf' }));
-    if (w) w.location.href = url; else location.href = url;
-  });
+  $('#openPdf')?.addEventListener('click', openOriginal);
+  showOrigState();
   $$('[data-del]').forEach((b) => b.addEventListener('click', async () => {
     if (!b.classList.contains('confirm')) {
       b.classList.add('confirm');
@@ -1054,9 +1132,10 @@ function openDateSheet(lib, project, current, sheetDate) {
 const LOG_PRESETS = ['사무실 집합', '장비집 집합', '장비집 출발', '현장 도착', '현장 출발', '현장 종료', '장비집 도착', '업무 종료'];
 const nowHM = () => new Date().toTimeString().slice(0, 5);
 
-// 시간 기록 추가/수정 (index가 null이면 새로 추가)
-function openLogSheet(lib, project, index) {
-  const entries = logOf(project).map((e) => ({ ...e }));
+// 시간 기록 추가/수정 (index가 null이면 새로 추가). kind 'log' = 실제 시간, 'plan' = 계획 시간. preset = 미리 채울 이름
+function openLogSheet(lib, project, index, kind = 'log', preset = '') {
+  const isPlan = kind === 'plan';
+  const entries = (isPlan ? planOf(project) : logOf(project)).map((e) => ({ ...e }));
   const cur = index == null ? null : entries[index];
   // 같은 이름이 이미 있으면 번호를 붙여 제안 ("현장 도착" → "현장2 도착")
   const suggest = (base) => {
@@ -1065,15 +1144,18 @@ function openLogSheet(lib, project, index) {
     const n = entries.filter((e) => re.test(e.label)).length;
     return n ? `${place}${n + 1} ${act}` : base;
   };
+  // 실제 기록: 같은 이름의 계획이 있으면 보여준다
+  const planned = !isPlan && planOf(project).find((e) => normLabel(e.label) === normLabel(cur?.label || preset));
   const el = document.createElement('div');
   el.className = 'sheet-backdrop';
   el.innerHTML = `
   <form class="sheet log-sheet form" autocomplete="off">
     <p class="eyebrow">${h(project.title)}</p>
-    <h2>${cur ? '기록 고치기' : '시간 기록'}</h2>
+    <h2>${isPlan ? (cur ? '계획 고치기' : '계획 시간') : (cur ? '기록 고치기' : '실제 시간 기록')}</h2>
+    ${isPlan ? '<p class="muted small">미리 정한 시간을 적어 두면 실제 기록과 나란히 비교돼요.</p>' : ''}
     <div class="log-presets">${LOG_PRESETS.map((t) => `<button type="button" data-preset="${h(t)}">${h(suggest(t))}</button>`).join('')}</div>
-    <label>무엇을 했나요<input name="label" value="${h(cur?.label || '')}" placeholder="예: 장비집2 집합" maxlength="30"></label>
-    <label>시간<input type="time" name="time" value="${h(cur?.time || nowHM())}" required></label>
+    <label>무엇${isPlan ? '을 할 건가요' : '을 했나요'}<input name="label" value="${h(cur?.label || preset)}" placeholder="예: 장비집2 집합" maxlength="30"></label>
+    <label>${isPlan ? '계획 시간' : '시간'}${planned ? ` <span class="opt">계획 ${h(planned.time)}</span>` : ''}<input type="time" name="time" value="${h(cur?.time || (isPlan ? '' : nowHM()))}" required></label>
     <div class="sheet-actions">
       ${cur ? '<button type="button" class="btn ghost danger" data-del>지우기</button>' : ''}
       <span class="spacer"></span>
@@ -1094,7 +1176,7 @@ function openLogSheet(lib, project, index) {
   const save = async (next, msg) => {
     $$('button', form).forEach((b) => (b.disabled = true));
     try {
-      await lib.setLog(project.id, next);
+      await lib.setLog(project.id, next, kind);
       close();
       toast(msg);
       route();
@@ -1110,16 +1192,15 @@ function openLogSheet(lib, project, index) {
     if (!v.label.trim()) return toast('무엇을 했는지 적어 주세요');
     const item = { id: cur?.id || Date.now().toString(36), label: v.label.trim(), time: v.time };
     if (cur) entries[index] = item; else entries.push(item);
-    save(entries, '기록했어요');
+    save(entries, isPlan ? '계획을 적어 뒀어요' : '기록했어요');
   });
 }
 
 // 업무 공유 (카톡용): 제목 / 빈 줄 / 날짜 요일 / 이동 경로 / 집합~종료 / 견적
 const CITY_ALIAS_KEY = 'shoot-briefing.cityAlias';
-const toMin = (t) => { const m = String(t || '').match(/(\d{1,2}):(\d{2})/); return m ? Number(m[1]) * 60 + Number(m[2]) : null; };
 function openShareSheet(lib, project, a, editable) {
   const prev = project.share || {};
-  const entries = logOf(project);
+  const entries = effLog(project);
   const findLog = (re, last = false) => { const list = entries.filter((e) => re.test(e.label)); return (last ? list[list.length - 1] : list[0])?.time || ''; };
   // 주소의 시·군 이름 → 내가 고쳐 쓴 이름 (예: 고양 → 일산)을 기억해 다음부터 자동 적용
   let alias = {};
@@ -1898,8 +1979,8 @@ async function uploadFilesInner(files, projectId, space) {
         compare: async (prev, next, pl, nl) => (await compareVersions(settings.anthropicKey, { prev, next, prevLabel: pl, nextLabel: nl })).data,
         onStep: (k) => { if (k === 'diff') { $('[data-step="diff"]').className = ''; sheet.detail('이전 버전과 무엇이 달라졌는지 비교 중…'); } sheet.step(k); if (k === 'save') sheet.detail(lib.store.kind === 'github' ? 'GitHub 비공개 저장소에 저장 중…' : '이 기기에 저장 중…'); },
       });
-      // 줄여서 저장한 경우 원본은 이 기기에 보관해 '원본 PDF 열기'로 볼 수 있게
-      if (extra.reduced) await originals.put(`${space}/${project.id}/${savedMeta.id}`, file).catch((err) => console.warn('원본 보관 실패', err));
+      // 올린 기기에는 원본을 보관해 '원본 PDF 열기'로 바로 볼 수 있게 (줄여서 저장한 큰 PDF는 원본이 이 기기에만 있음)
+      await originals.put(`${space}/${project.id}/${savedMeta.id}`, file).catch((err) => console.warn('원본 보관 실패', err));
       lastProject = project;
     } catch (e) {
       console.error(e);
