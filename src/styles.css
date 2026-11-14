@@ -874,3 +874,14 @@ p, li, .stop-role, .tl-loc, .sr-sub { text-wrap: pretty; }
 .share-pd { grid-template-columns: 1fr 1.5fr; }
 .share-times > label { min-width: 0; }
 .share-times input { min-width: 0; width: 100%; }
+
+/* 계획 시간 (여러 줄) */
+.plan-list { list-style: none; margin: 4px 0 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.plan-row { display: grid; grid-template-columns: minmax(0, 1fr) 128px 32px; gap: 8px; align-items: center; border-radius: 14px; }
+.plan-row input { min-width: 0; width: 100%; }
+.plan-row .plan-time { font-variant-numeric: tabular-nums; font-weight: 700; }
+.plan-del { width: 32px; height: 32px; border: 0; border-radius: 50%; background: var(--bg-alt); color: var(--muted); font-size: 18px; line-height: 1; cursor: pointer; padding: 0; }
+.plan-add { width: 100%; margin-top: 10px; padding: 12px; border: 1.5px dashed color-mix(in srgb, var(--accent) 40%, transparent); border-radius: 14px; background: var(--accent-soft); color: var(--accent); font: inherit; font-weight: 700; cursor: pointer; }
+.plan-row { grid-template-columns: minmax(0, 1fr) 150px 28px; gap: 6px; }
+.plan-row input { padding-left: 12px; padding-right: 10px; }
+.plan-del { width: 28px; height: 28px; font-size: 16px; }

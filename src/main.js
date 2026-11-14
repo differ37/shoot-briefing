@@ -866,10 +866,11 @@ async function renderProject(space, pid, vid) {
   $('[data-date-edit]')?.addEventListener('click', () => openDateSheet(lib, project, shootDate, prod.shoot_date));
   $$('[data-log-edit]').forEach((b) => b.addEventListener('click', () => {
     const [kind, i] = b.dataset.logEdit.split(':');
+    if (kind === 'plan') return openPlanSheet(lib, project, planOf(project)[Number(i)]?.label);
     openLogSheet(lib, project, Number(i), kind);
   }));
-  $('[data-plan-add]')?.addEventListener('click', () => openLogSheet(lib, project, null, 'plan'));
-  $$('[data-plan-for]').forEach((b) => b.addEventListener('click', () => openLogSheet(lib, project, null, 'plan', b.dataset.planFor)));
+  $('[data-plan-add]')?.addEventListener('click', () => openPlanSheet(lib, project));
+  $$('[data-plan-for]').forEach((b) => b.addEventListener('click', () => openPlanSheet(lib, project, b.dataset.planFor)));
   $$('[data-log-now]').forEach((b) => b.addEventListener('click', () => openLogSheet(lib, project, null, 'log', b.dataset.logNow)));
   $('[data-share-work]')?.addEventListener('click', () => openShareSheet(lib, project, a, canEdit(space)));
 
@@ -896,19 +897,44 @@ async function renderProject(space, pid, vid) {
     }
     return pdfCache;
   };
-  // 원본 PDF 새 탭으로 열기: 이 기기에 있으면 바로, 없으면 저장소에서 받는다 (큰 원본은 이 기기에만 있음)
+  // 원본 PDF 열기
+  //  · PC: PDF를 새 탭에서 바로 연다(팝업이 막히면 파일로 내려받기)
+  //  · 휴대폰: 공유 창에 PDF 파일을 넘긴다 → 'Acrobat'을 누르면 Acrobat 앱에서 열림
+  //    (아이폰은 웹에서 다른 앱으로 파일을 직접 넘길 방법이 공유 창뿐이다. 공유 창은 누른 순간 열어야 해서 파일을 미리 준비해 둔다)
+  const isPhone = matchMedia('(pointer: coarse)').matches && /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
+  const pdfName = () => `${String(meta.fileName || project.title || '원본').replace(/\.[a-z0-9]+$/i, '').replace(/[\\/:*?"<>|]/g, ' ').trim() || '원본'}.pdf`;
+  const loadOrig = async () => (rec.reduced ? await originals.get(origKey) : await getPdfBlob());
+  let origFile = null;
+  const prepOrig = () => loadOrig().then((blob) => { if (blob) origFile = new File([blob], pdfName(), { type: 'application/pdf' }); return origFile; }).catch(() => null);
+  if (isPhone && navigator.canShare) prepOrig();
+  const noOrig = () => {
+    toast('이 기기엔 원본이 없어요. 원본 파일을 한 번 골라 주세요');
+    document.getElementById('sec-orig')?.scrollIntoView({ behavior: 'smooth' });
+  };
   const openOriginal = async () => {
-    const w = window.open('', '_blank'); // 팝업 차단을 피하려고 누른 순간 먼저 연다
-    try {
-      const blob = rec.reduced ? await originals.get(origKey) : await getPdfBlob();
-      if (!blob) {
-        w?.close();
-        toast('이 기기엔 원본이 없어요. 원본 파일을 한 번 골라 주세요');
-        document.getElementById('sec-orig')?.scrollIntoView({ behavior: 'smooth' });
+    if (isPhone && navigator.canShare) {
+      if (!origFile) {
+        toast('PDF 준비 중이에요…');
+        const f = await prepOrig();
+        if (!f) return noOrig();
+        return toast('준비됐어요 · 한 번 더 누르면 Acrobat으로 열 수 있어요');
+      }
+      if (navigator.canShare({ files: [origFile] })) {
+        try { await navigator.share({ files: [origFile] }); } catch (err) { if (err.name !== 'AbortError') toast('열지 못했어요 · 다시 눌러 주세요'); }
         return;
       }
-      const url = URL.createObjectURL(new Blob([blob], { type: 'application/pdf' }));
-      if (w) w.location.href = url; else location.href = url;
+    }
+    const w = window.open('', '_blank'); // 팝업 차단을 피하려고 누른 순간 먼저 연다
+    try {
+      const blob = await loadOrig();
+      if (!blob) { w?.close(); return noOrig(); }
+      const url = URL.createObjectURL(new File([blob], pdfName(), { type: 'application/pdf' }));
+      if (w) w.location.href = url;
+      else {
+        const link = Object.assign(document.createElement('a'), { href: url, download: pdfName() });
+        document.body.appendChild(link); link.click(); link.remove();
+      }
+      setTimeout(() => URL.revokeObjectURL(url), 60000);
     } catch {
       w?.close();
       toast('PDF를 불러오지 못했어요');
@@ -1221,6 +1247,112 @@ function openLogSheet(lib, project, index, kind = 'log', preset = '') {
     const item = { id: cur?.id || Date.now().toString(36), label: v.label.trim(), time: v.time };
     if (cur) entries[index] = item; else entries.push(item);
     save(entries, isPlan ? '계획을 적어 뒀어요' : '기록했어요');
+  });
+}
+
+// 계획 시간 (한 번에 여러 줄): 기본 3줄(장비집 도착·장비집 출발·현장 도착) + "추가"로 이름·시간 직접.
+// 시간을 넣으면 시간 순서대로 저절로 자리를 옮긴다. 시간이 빈 줄은 저장하지 않는다.
+const PLAN_DEFAULTS = ['장비집 도착', '장비집 출발', '현장 도착'];
+function openPlanSheet(lib, project, focusLabel = '') {
+  const rows = planOf(project).map((e) => ({ ...e }));
+  for (const d of PLAN_DEFAULTS) if (!rows.some((e) => normLabel(e.label) === normLabel(d))) rows.push({ label: d, time: '' });
+  if (focusLabel && !rows.some((e) => normLabel(e.label) === normLabel(focusLabel))) rows.push({ label: focusLabel, time: '' });
+  let seq = 0;
+  rows.forEach((r) => { r.key = `k${seq++}`; });
+  // 정렬 열쇠: 시간 없는 줄은 맨 아래. 낮 시간이 있으면 새벽(0~5시)은 다음날로 본다(예: 23:00 → 01:30)
+  const sortRows = () => {
+    const mins = rows.map((r) => toMin(r.time)).filter((m) => m != null);
+    const night = mins.some((m) => m >= 12 * 60);
+    const key = (r) => { const m = toMin(r.time); return m == null ? 1e9 : night && m < 6 * 60 ? m + 1440 : m; };
+    rows.sort((x, y) => key(x) - key(y));
+  };
+  sortRows();
+  const el = document.createElement('div');
+  el.className = 'sheet-backdrop';
+  el.innerHTML = `
+  <form class="sheet log-sheet plan-sheet form" autocomplete="off">
+    <p class="eyebrow">${h(project.title)}</p>
+    <h2>계획 시간</h2>
+    <p class="muted small">시간을 넣으면 시간 순서대로 저절로 정리돼요.</p>
+    <ol class="plan-list"></ol>
+    <button type="button" class="plan-add" data-add>+ 추가</button>
+    <div class="sheet-actions">
+      <span class="spacer"></span>
+      <button type="button" class="btn ghost" data-cancel>취소</button>
+      <button type="submit" class="btn">저장</button>
+    </div>
+  </form>`;
+  document.body.appendChild(el);
+  requestAnimationFrame(() => el.classList.add('show'));
+  const close = () => { el.classList.remove('show'); setTimeout(() => el.remove(), 300); };
+  const form = $('form', el);
+  const list = $('.plan-list', form);
+  const rowHtml = (r) => `
+    <li class="plan-row" data-key="${r.key}">
+      <input class="plan-label" value="${h(r.label)}" placeholder="무엇을 (예: 사무실 집합)" maxlength="30" aria-label="내용">
+      <input class="plan-time" type="time" value="${h(r.time)}" aria-label="시간">
+      <button type="button" class="plan-del" data-del aria-label="이 줄 지우기">×</button>
+    </li>`;
+  const render = () => { list.innerHTML = rows.map(rowHtml).join(''); };
+  // 순서가 바뀔 때 부드럽게 미끄러지듯 이동 (FLIP)
+  const reorder = (movedKey) => {
+    const before = new Map($$('.plan-row', list).map((li) => [li.dataset.key, li.getBoundingClientRect().top]));
+    sortRows();
+    for (const r of rows) list.appendChild(list.querySelector(`[data-key="${r.key}"]`));
+    $$('.plan-row', list).forEach((li) => {
+      const dy = (before.get(li.dataset.key) ?? 0) - li.getBoundingClientRect().top;
+      if (!dy) return;
+      li.animate([{ transform: `translateY(${dy}px)` }, { transform: 'none' }], { duration: 260, easing: 'cubic-bezier(.2,.8,.2,1)' });
+      if (li.dataset.key === movedKey) li.animate([{ background: 'var(--accent-soft)' }, { background: 'transparent' }], { duration: 900 });
+    });
+  };
+  render();
+  const rowOf = (t) => rows.find((r) => r.key === t.closest('.plan-row')?.dataset.key);
+  list.addEventListener('input', (e) => {
+    const r = rowOf(e.target);
+    if (!r) return;
+    if (e.target.classList.contains('plan-label')) r.label = e.target.value;
+    else r.time = e.target.value;
+  });
+  // 시간은 다 고른 뒤(change)에 자리를 옮긴다
+  list.addEventListener('change', (e) => {
+    if (!e.target.classList.contains('plan-time')) return;
+    const r = rowOf(e.target);
+    if (r) { r.time = e.target.value; reorder(r.key); }
+  });
+  list.addEventListener('click', (e) => {
+    if (!e.target.closest('[data-del]')) return;
+    const r = rowOf(e.target);
+    rows.splice(rows.indexOf(r), 1);
+    e.target.closest('.plan-row').remove();
+  });
+  $('[data-add]', form).addEventListener('click', () => {
+    const r = { label: '', time: '', key: `k${seq++}` };
+    rows.push(r);
+    sortRows();
+    render();
+    list.querySelector(`[data-key="${r.key}"] .plan-label`)?.focus();
+  });
+  el.addEventListener('click', (e) => { if (e.target === el || e.target.closest('[data-cancel]')) close(); });
+  if (focusLabel) {
+    const r = rows.find((x) => normLabel(x.label) === normLabel(focusLabel));
+    setTimeout(() => list.querySelector(`[data-key="${r?.key}"] .plan-time`)?.focus(), 350);
+  }
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    sortRows();
+    if (rows.some((r) => r.time && !r.label.trim())) return toast('시간을 넣은 줄의 내용을 적어 주세요');
+    const next = rows.filter((r) => r.time && r.label.trim()).map((r) => ({ id: r.id || Date.now().toString(36) + r.key, label: r.label.trim(), time: r.time }));
+    $$('button', form).forEach((b) => (b.disabled = true));
+    try {
+      await lib.setLog(project.id, next, 'plan');
+      close();
+      toast(next.length ? '계획을 적어 뒀어요' : '계획을 비웠어요');
+      route();
+    } catch (err) {
+      toast(err.status === 403 || err.status === 404 ? '저장 권한이 없어요' : err.message);
+      $$('button', form).forEach((b) => (b.disabled = false));
+    }
   });
 }
 
