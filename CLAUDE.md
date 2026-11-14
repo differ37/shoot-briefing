@@ -47,7 +47,7 @@ npm run build
   (GitHub Releases는 다운로드 리다이렉트·업로드가 CORS를 막아 브라우저에서 못 씀 — 2026-10-06 확인)
 - `src/library.js` — 촬영(project) ⊃ 버전 데이터 관리, 버전 순서(파일명 `v0930_01`), 변경 재계산, `saveVersion`(버전 JSON 고쳐 저장).
   내 시간 기록: 실제 `project.log=[{id,label,time}]` + 계획 `project.plan`(같은 모양, `setLog(pid, entries, 'plan')`) — 화면에선 이름으로 짝지어 계획/실제/차이 표(`logRows`, 시간순, 첫 기록보다 6시간 넘게 이른 시간은 다음날), 요약·업무 공유는 실제 우선·없으면 계획(`effLog`). (예전 `project.prep` 장비집 집합/출발은 `logOf()`가 기록으로 바꿔 보여주고 저장 시 log로 옮김),
-  업무 공유에 쓴 값 `project.share={title,date,route,start,end,fee}`,
+  업무 공유에 쓴 값 `project.share={title,date,route,start,end,fee,prod,pd,phone,note,notion?:{ids,lines}}`,
   촬영일 직접 고치기 `setDate(pid, date|null)` → `project.dateFixed=true`면 새 버전이 와도 날짜 유지(null이면 최신 버전 타임테이블 날짜로 되돌림, 촬영 id는 안 바꿈)
   `fixShootDate`: 타임테이블에 연도가 없으면 Claude가 요일만 맞춰 엉뚱한 해(2020)를 고른 적이 있다 → 오늘에서 200일 넘게 떨어진 촬영일은 작년·올해·내년 중 요일이 맞고 가장 가까운 해로 바꾼다(목록 load·버전 읽기·저장 때 자동). 분석 프롬프트에도 오늘 날짜를 넘김.
 - `src/storage.js` — `GitHubStore`(Contents API, 1MB 넘으면 raw로 읽음) / `LocalStore`(IndexedDB) / `PrefixedStore`(사람별 폴더) / `originals`(큰 원본 기기 보관)
@@ -99,6 +99,7 @@ npm run build
 - `shoot-briefing.lastPrice` — 마지막 견적 금액
 - `shoot-briefing.cityAlias` — 경로 이름 고친 것(예: 고양→일산)
 - `shoot-briefing.conti` — 콘티 켜기/끄기
+- `shoot-briefing.worklogPass` — 노션 업무일지 비밀번호(업무 공유 → 노션 기록용, 로그아웃 시 삭제)
 - IndexedDB `shoot-briefing-originals` — 큰 원본 PDF
 
 ## 주의할 점
@@ -122,7 +123,7 @@ npm run build
   - 끝나면 `public/__test/`, .gitignore 줄, IndexedDB(`shoot-briefing`, `shoot-briefing-originals`)·localStorage 테스트 데이터를 지우고 dev 서버를 끈다.
 - **이 컴퓨터에는 Claude API 키가 없다**(`ant` 없음, 환경변수 없음) — 실제 Claude 호출(분석·콘티 맞추기)은 사용자가 휴대폰에서 확인해야 한다.
   로그인 비밀번호가 필요한 흐름(실제 로그인, 사용자 관리)도 직접 테스트할 수 없다.
-- 배포 후 확인을 부탁할 때는 `?v=N`을 붙인 주소를 준다(GitHub Pages가 HTML을 10분 캐시). **지금까지 v=20까지 썼다** → 다음은 v=21.
+- 배포 후 확인을 부탁할 때는 `?v=N`을 붙인 주소를 준다(GitHub Pages가 HTML을 10분 캐시). **지금까지 v=21까지 썼다** → 다음은 v=22.
 - 사용자는 모바일(아이폰)로 주로 본다. 새 화면은 390px 폭에서 줄바꿈·넘침을 꼭 확인할 것.
 - push(=배포)는 사용자가 "배포해줘"라고 할 때. 사용자가 휴대폰으로 테스트하며 버그를 알려주는 경우엔 고친 뒤 바로 배포해 왔다.
 - 사용자에게는 한국어로, 쉬운 말로 설명한다(개발 용어 최소화). 커밋 메시지는 한국어.
@@ -165,7 +166,17 @@ npm run build
 - 원본 PDF 기기 보관·바로 열기. "페이지 보기" 버튼이 await 뒤 `e.currentTarget`이 비어 오류 토스트를 내던 것 고침.
 - 로컬 테스트는 `puppeteer-core`(스크래치 폴더에 설치)로 Chrome을 390px 모바일 화면으로 띄워 확인했다(seed 페이지로 IndexedDB·localStorage 채움). (v=19 배포)
 
+### 2026-11-14
+- 홈 4칸 개편(v=20).
+- 업무 공유 창 개편(v=21): 칸 전부 펼침 — 현장 집합/종료·견적·제목·날짜·이동 경로·프로덕션명·담당 PD·연락처·비고. **날짜만 자동, 나머지는 빈칸**(전에 입력한 값은 `project.share`에서 다시 채움).
+  보낼 내용 = 날짜 / 제목 / 시간 / 이동 경로 / 견적 / `프로덕션 PD 연락처` / 비고(있을 때만), 빈 줄은 뺌.
+  **공유 버튼(관리자 jj 본인 공간만)** → Web Share와 동시에 업무일지 Worker `POST /append`로 노션 '🎬 촬영 업무일지' 맨 아래에 기록.
+  첫 줄 날짜는 노션 기존 모양 `11/12(목)미결`로 바꿔 적음. 기록한 블록 id를 `project.share.notion`에 저장 → 다시 공유하면 예전 기록을 지우고 새로(노션에서 고쳤으면 그대로 두고 안내).
+  업무일지 비밀번호는 처음 공유 때 입력 → localStorage `shoot-briefing.worklogPass`(로그아웃 시 삭제). Worker 코드는 `~/Desktop/프로그램/내부파일/촬영_업무일지/worker`.
+
 ## 확인 대기 / 다음 후보
+
+- [ ] 업무 공유 → 노션 기록이 아이폰에서 되는지 (Worker는 실제 노션으로 기록·교체·삭제 시험 완료, 사이트→Worker 실제 호출은 미확인)
 
 - [ ] 계획/실제 시간 기록 표가 아이폰에서 쓰기 편한지
 - [ ] 원본 PDF 버튼이 아이폰에서 바로 열리는지 (기기 보관은 로그아웃하면 지워짐)

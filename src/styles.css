@@ -871,3 +871,6 @@ p, li, .stop-role, .tl-loc, .sr-sub { text-wrap: pretty; }
 .page-title { font-size: clamp(28px, 6vw, 40px); font-weight: 800; letter-spacing: -0.03em; margin: 4px 0 20px; display: flex; align-items: center; gap: 10px; }
 .past-page .sr-date { background: var(--bg-alt); color: var(--muted); }
 .past-page .sr-dday { color: var(--muted); }
+.share-pd { grid-template-columns: 1fr 1.5fr; }
+.share-times > label { min-width: 0; }
+.share-times input { min-width: 0; width: 100%; }

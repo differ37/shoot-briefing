@@ -1224,29 +1224,38 @@ function openLogSheet(lib, project, index, kind = 'log', preset = '') {
   });
 }
 
-// 업무 공유 (카톡용): 제목 / 빈 줄 / 날짜 요일 / 이동 경로 / 집합~종료 / 견적
+// 업무 공유 (카톡용) — 날짜 / 제목 / 시간 / 이동 경로 / 견적 / 프로덕션 PD 연락처 / 비고(있을 때만)
+// 날짜만 채워 두고 나머지는 직접 입력. 관리자(준연)는 "공유"를 누르면 노션 '촬영 업무일지' 맨 아래에도 그대로 기록한다.
 const CITY_ALIAS_KEY = 'shoot-briefing.cityAlias';
+const WORKLOG_API = 'https://shoot-worklog.worklog-4c1a.workers.dev';
+const WORKLOG_PASS_KEY = 'shoot-briefing.worklogPass';
+const phoneFmt = (s) => {
+  const d = digits(s);
+  if (/^01\d{8,9}$/.test(d)) return d.length === 10 ? `${d.slice(0, 3)}-${d.slice(3, 6)}-${d.slice(6)}` : `${d.slice(0, 3)}-${d.slice(3, 7)}-${d.slice(7)}`;
+  return s;
+};
 function openShareSheet(lib, project, a, editable) {
   const prev = project.share || {};
-  const entries = effLog(project);
-  const findLog = (re, last = false) => { const list = entries.filter((e) => re.test(e.label)); return (last ? list[list.length - 1] : list[0])?.time || ''; };
-  // 주소의 시·군 이름 → 내가 고쳐 쓴 이름 (예: 고양 → 일산)을 기억해 다음부터 자동 적용
+  // 주소의 시·군 이름 → 내가 고쳐 쓴 이름 (예: 고양 → 일산)을 기억해 둔다
   let alias = {};
   try { alias = JSON.parse(localStorage.getItem(CITY_ALIAS_KEY) || '{}'); } catch {}
   const cities = (a.locations || []).map((l) => cityOf(l.address) || '').filter(Boolean).filter((c, i, arr) => c !== arr[i - 1]);
-  const routeAuto = cities.map((c) => alias[c] || c).join('>');
-  const wrap = String(a.wrap_time || '').match(/\d{1,2}:\d{2}/)?.[0] || '';
-  let lastPrice = '';
-  try { lastPrice = localStorage.getItem(LAST_PRICE_KEY) || ''; } catch {}
   const [, mm, dd] = (project.date || '').split('-').map(Number);
   const v0 = {
-    title: prev.title || a.production?.project_title || project.title,
+    title: prev.title || '',
     date: prev.date || (project.date ? `${mm}/${dd} ${project.weekday || '일월화수목금토'[new Date(project.date + 'T00:00:00').getDay()]}` : ''),
-    route: prev.route || routeAuto,
-    start: prev.start || findLog(/현장\d*\s*(집합|도착)/) || a.my_call?.time || '',
-    end: prev.end || findLog(/(현장\d*|촬영)\s*종료/, true) || wrap,
-    fee: prev.fee || lastPrice,
+    route: prev.route || '',
+    start: prev.start || '',
+    end: prev.end || '',
+    fee: prev.fee || '',
+    prod: prev.prod || '',
+    pd: prev.pd || '',
+    phone: prev.phone || '',
+    note: prev.note || '',
   };
+  const toNotion = isAdmin() && project && lib.space === mySpace();
+  let savedPass = '';
+  try { savedPass = localStorage.getItem(WORKLOG_PASS_KEY) || ''; } catch {}
   const el = document.createElement('div');
   el.className = 'sheet-backdrop';
   el.innerHTML = `
@@ -1258,17 +1267,21 @@ function openShareSheet(lib, project, a, editable) {
       <label>현장 종료<input type="time" name="end" value="${h(v0.end)}"></label>
     </div>
     <label class="q-price">견적<span class="won-input"><input name="fee" inputmode="numeric" value="${h(v0.fee ? won(v0.fee) : '')}" placeholder="예: 550,000"><em>원</em></span></label>
-    <details class="q-more">
-      <summary>제목 · 날짜 · 이동 경로 ${icon.chevron}</summary>
-      <label>제목<input name="title" value="${h(v0.title)}"></label>
-      <label>날짜<input name="date" value="${h(v0.date)}"></label>
-      <label>이동 경로 <span class="opt">">"로 구분</span><input name="route" value="${h(v0.route)}" placeholder="예: 용인>일산"></label>
-    </details>
-    <label>보낼 내용<textarea name="msg" rows="6"></textarea></label>
+    <label>제목<input name="title" value="${h(v0.title)}" placeholder="예: 비트펠라하우스 뮤비"></label>
+    <label>날짜<input name="date" value="${h(v0.date)}"></label>
+    <label>이동 경로 <span class="opt">">"로 구분</span><input name="route" value="${h(v0.route)}" placeholder="예: 용인>일산"></label>
+    <label>프로덕션명<input name="prod" value="${h(v0.prod)}" placeholder="예: 리미널"></label>
+    <div class="share-times share-pd">
+      <label>담당 PD<input name="pd" value="${h(v0.pd)}" placeholder="예: 김철수"></label>
+      <label>연락처<input name="phone" type="tel" inputmode="tel" value="${h(v0.phone)}" placeholder="010-0000-0000"></label>
+    </div>
+    <label>비고 <span class="opt">비우면 안 보내요</span><textarea name="note" rows="2">${h(v0.note)}</textarea></label>
+    ${toNotion && !savedPass ? `<label>업무일지 비밀번호 <span class="opt">처음 한 번만 · 노션 기록용</span><input name="wpass" type="text" autocapitalize="off" autocorrect="off" spellcheck="false"></label>` : ''}
+    <label>보낼 내용<textarea name="msg" rows="7"></textarea></label>
     <div class="sheet-actions">
       <button type="button" class="btn ghost" data-cancel>닫기</button>
       <span class="spacer"></span>
-      ${navigator.share ? `<button type="button" class="btn ghost" data-share>${icon.upload} 공유</button>` : ''}
+      ${navigator.share || toNotion ? `<button type="button" class="btn ghost" data-share>${icon.upload} 공유</button>` : ''}
       <button type="submit" class="btn">${icon.copy} 복사</button>
     </div>
   </form>`;
@@ -1287,8 +1300,15 @@ function openShareSheet(lib, project, a, editable) {
   const build = () => {
     const v = Object.fromEntries(new FormData(form));
     const fee = digits(v.fee);
-    return [v.title.trim(), '', v.date.trim(), v.route.trim(), v.start || v.end ? `${v.start}~${endText(v.start, v.end)}` : '', fee ? `견적 ${won(fee)}` : '']
-      .filter((line, i) => i < 2 || line).join('\n');
+    return [
+      v.date.trim(),
+      v.title.trim(),
+      v.start || v.end ? `${v.start}~${endText(v.start, v.end)}` : '',
+      v.route.trim(),
+      fee ? `견적 ${won(fee)}` : '',
+      [v.prod, v.pd, v.phone].map((x) => x.trim()).filter(Boolean).join(' '),
+      v.note.trim(),
+    ].filter(Boolean).join('\n');
   };
   const refresh = () => { if (!edited) msg.value = build(); };
   form.addEventListener('input', (e) => {
@@ -1296,14 +1316,25 @@ function openShareSheet(lib, project, a, editable) {
     if (e.target.name === 'fee') { const d = digits(e.target.value); e.target.value = d ? won(d) : ''; }
     refresh();
   });
+  form.addEventListener('change', (e) => {
+    if (e.target.name === 'phone') { e.target.value = phoneFmt(e.target.value); refresh(); }
+  });
   refresh();
   el.addEventListener('click', (e) => { if (e.target === el || e.target.closest('[data-cancel]')) close(); });
-  const remember = () => {
+  const values = () => {
     const v = Object.fromEntries(new FormData(form));
-    const share = { title: v.title.trim(), date: v.date.trim(), route: v.route.trim(), start: v.start, end: v.end, fee: digits(v.fee) };
+    const t = (k) => String(v[k] || '').trim();
+    return { title: t('title'), date: t('date'), route: t('route'), start: v.start, end: v.end, fee: digits(v.fee), prod: t('prod'), pd: t('pd'), phone: t('phone'), note: t('note') };
+  };
+  const saveShare = (share) => {
     if (editable && JSON.stringify(share) !== JSON.stringify(project.share || {})) lib.setShare(project.id, share).then(() => { project.share = share; }).catch(() => {});
+  };
+  const remember = () => {
+    const share = { ...values(), notion: project.share?.notion };
+    if (!share.notion) delete share.notion;
+    saveShare(share);
     const typed = share.route.split('>').map((x) => x.trim());
-    if (typed.length === cities.length) {
+    if (share.route && typed.length === cities.length) {
       cities.forEach((c, i) => { if (typed[i] && typed[i] !== c) alias[c] = typed[i]; else if (typed[i] === c) delete alias[c]; });
       try { localStorage.setItem(CITY_ALIAS_KEY, JSON.stringify(alias)); } catch {}
     }
@@ -1313,9 +1344,47 @@ function openShareSheet(lib, project, a, editable) {
     remember();
     toast((await copyText(msg.value)) ? '복사했어요 · 카톡에 붙여넣기 하세요' : '복사하지 못했어요');
   });
+
+  // 노션 업무일지 맨 아래에 기록 (같은 촬영을 다시 공유하면 예전 기록을 지우고 새로 적는다)
+  const recordNotion = async (text) => {
+    const pass = savedPass || String(form.elements.wpass?.value || '').trim();
+    if (!pass) return toast('업무일지 비밀번호를 넣으면 노션에도 기록돼요');
+    const lines = text.split('\n');
+    // 업무일지의 기존 기록과 같은 모양으로: "11/12 목" → "11/12(목)미결"
+    const dm = lines[0].match(/^\s*(\d{1,2}\/\d{1,2}(?:\s*[~,]\s*\d{1,2})*)\s*\(?([일월화수목금토]+)\)?\s*$/);
+    if (dm) lines[0] = `${dm[1].replace(/\s+/g, '')}(${dm[2]})미결`;
+    const old = project.share?.notion;
+    if (old && JSON.stringify(old.lines.filter(Boolean)) === JSON.stringify(lines.filter(Boolean))) return toast('노션에 이미 같은 내용이 기록돼 있어요');
+    const call = (replace) => fetch(`${WORKLOG_API}/append`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Pass': encodeURIComponent(pass) },
+      body: JSON.stringify({ lines, replace }),
+    });
+    try {
+      const r = await call(old);
+      // 노션에서 이미 고친 기록(입금 확인 등)은 건드리지 않는다 — 중복으로 적지도 않음
+      if (r.status === 409) return toast('노션에서 이미 고친 기록이라 그대로 뒀어요');
+      if (r.status === 401) {
+        try { localStorage.removeItem(WORKLOG_PASS_KEY); } catch {}
+        savedPass = '';
+        return toast('업무일지 비밀번호가 맞지 않아요');
+      }
+      if (!r.ok) throw new Error(String(r.status));
+      const d = await r.json();
+      if (!savedPass) { savedPass = pass; try { localStorage.setItem(WORKLOG_PASS_KEY, pass); } catch {} form.elements.wpass?.closest('label')?.remove(); }
+      saveShare({ ...values(), notion: { ids: d.ids, lines: d.lines } });
+      toast(old ? '노션 업무일지 기록을 고쳤어요' : '노션 업무일지에 기록했어요');
+    } catch {
+      toast('노션에 기록하지 못했어요 · 잠시 후 다시 눌러 주세요');
+    }
+  };
   $('[data-share]', form)?.addEventListener('click', async () => {
     remember();
-    try { await navigator.share({ text: msg.value }); } catch (err) { if (err.name !== 'AbortError') toast('공유하지 못했어요'); }
+    const text = msg.value;
+    // 공유 창은 누른 순간에 열어야 해서(아이폰) 노션 기록과 동시에 시작한다
+    const sharing = navigator.share ? navigator.share({ text }).catch((err) => { if (err.name !== 'AbortError') toast('공유하지 못했어요'); }) : null;
+    if (toNotion) await recordNotion(text);
+    await sharing;
   });
 }
 
@@ -1591,7 +1660,7 @@ document.addEventListener('click', (e) => { if (e.target.closest('[data-action="
 
 // ---------------------------------------------------------------- 설정
 function logout() {
-  try { localStorage.removeItem(SETTINGS_KEY); localStorage.removeItem(SOURCE_KEY); } catch {}
+  try { localStorage.removeItem(SETTINGS_KEY); localStorage.removeItem(SOURCE_KEY); localStorage.removeItem(WORKLOG_PASS_KEY); } catch {}
   originals.clear(); // 이 기기에 보관한 큰 원본도 지운다
   settings = loadSettings();
   libraries.clear();
