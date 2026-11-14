@@ -1161,7 +1161,7 @@ function openDateSheet(lib, project, current, sheetDate) {
   requestAnimationFrame(() => el.classList.add('show'));
   const close = () => { el.classList.remove('show'); setTimeout(() => el.remove(), 300); };
   const form = $('form', el);
-  el.addEventListener('click', (e) => { if (e.target === el || e.target.closest('[data-cancel]')) close(); });
+  el.addEventListener('click', (e) => { if (e.target.closest('[data-cancel]')) close(); });
   const save = async (date, msg) => {
     $$('button', form).forEach((b) => (b.disabled = true));
     try {
@@ -1223,7 +1223,7 @@ function openLogSheet(lib, project, index, kind = 'log', preset = '') {
   const form = $('form', el);
   const label = $('input[name=label]', form);
   el.addEventListener('click', (e) => {
-    if (e.target === el || e.target.closest('[data-cancel]')) return close();
+    if (e.target.closest('[data-cancel]')) return close();
     const b = e.target.closest('[data-preset]');
     if (b) { label.value = b.textContent; label.focus(); }
   });
@@ -1273,7 +1273,7 @@ function openPlanSheet(lib, project, focusLabel = '') {
   <form class="sheet log-sheet plan-sheet form" autocomplete="off">
     <p class="eyebrow">${h(project.title)}</p>
     <h2>계획 시간</h2>
-    <p class="muted small">시간을 넣으면 시간 순서대로 저절로 정리돼요.</p>
+    <p class="muted small">시간을 다 고르면 시간 순서대로 저절로 정리돼요.</p>
     <ol class="plan-list"></ol>
     <button type="button" class="plan-add" data-add>+ 추가</button>
     <div class="sheet-actions">
@@ -1314,11 +1314,21 @@ function openPlanSheet(lib, project, focusLabel = '') {
     if (e.target.classList.contains('plan-label')) r.label = e.target.value;
     else r.time = e.target.value;
   });
-  // 시간은 다 고른 뒤(change)에 자리를 옮긴다
+  // 자리 옮기기는 시간 고르기가 끝난 뒤(칸에서 손을 뗀 뒤)에만.
+  // 아이폰 시간 휠은 돌리는 중에도 change가 계속 와서, 그때 줄을 옮기면 휠이 닫히고 중간 시간이 들어갔다.
+  let movedKey = null;
   list.addEventListener('change', (e) => {
     if (!e.target.classList.contains('plan-time')) return;
     const r = rowOf(e.target);
-    if (r) { r.time = e.target.value; reorder(r.key); }
+    if (r) { r.time = e.target.value; movedKey = r.key; }
+  });
+  list.addEventListener('focusout', () => {
+    setTimeout(() => {
+      if (!movedKey || list.contains(document.activeElement)) return; // 아직 다른 칸을 고치는 중이면 기다린다
+      const k = movedKey;
+      movedKey = null;
+      reorder(k);
+    }, 250);
   });
   list.addEventListener('click', (e) => {
     if (!e.target.closest('[data-del]')) return;
@@ -1333,7 +1343,7 @@ function openPlanSheet(lib, project, focusLabel = '') {
     render();
     list.querySelector(`[data-key="${r.key}"] .plan-label`)?.focus();
   });
-  el.addEventListener('click', (e) => { if (e.target === el || e.target.closest('[data-cancel]')) close(); });
+  el.addEventListener('click', (e) => { if (e.target.closest('[data-cancel]')) close(); });
   if (focusLabel) {
     const r = rows.find((x) => normLabel(x.label) === normLabel(focusLabel));
     setTimeout(() => list.querySelector(`[data-key="${r?.key}"] .plan-time`)?.focus(), 350);
@@ -1452,7 +1462,7 @@ function openShareSheet(lib, project, a, editable) {
     if (e.target.name === 'phone') { e.target.value = phoneFmt(e.target.value); refresh(); }
   });
   refresh();
-  el.addEventListener('click', (e) => { if (e.target === el || e.target.closest('[data-cancel]')) close(); });
+  el.addEventListener('click', (e) => { if (e.target.closest('[data-cancel]')) close(); });
   const values = () => {
     const v = Object.fromEntries(new FormData(form));
     const t = (k) => String(v[k] || '').trim();
