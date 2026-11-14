@@ -297,6 +297,7 @@ async function route() {
     if (parts[0] !== 's' || !parts[1]) { location.replace(L(mySpace())); return; }
     currentSpace = parts[1];
     if (parts[2] === 'p' && parts[3]) return await renderProject(currentSpace, parts[3], parts[4]);
+    if (parts[2] === 'past') return await renderPast(currentSpace);
     return await renderHome(currentSpace);
   } catch (e) {
     console.error(e);
@@ -392,112 +393,139 @@ function renderLogin(message = '') {
 }
 
 // ---------------------------------------------------------------- 홈
-async function renderHome(space) {
-  app.innerHTML = shell('<section class="section"><div class="skeleton tall"></div></section>', { active: 'home' });
-  const lib = await getLibrary(space);
+// 촬영 한 줄 (월별 목록용)
+const shootRow = (lib, space, p) => {
+  const latest = lib.latest(p);
+  const [, m, d] = (p.date || '').split('-').map(Number);
+  return `
+  <a class="shoot-row" href="${L(space, p.id)}" data-pid="${h(p.id)}">
+    <div class="sr-date">${p.date ? `<b>${m}.${d}</b><span>${h(p.weekday || '일월화수목금토'[new Date(p.date + 'T00:00:00').getDay()])}</span>` : '<b>미정</b>'}</div>
+    <div class="sr-body">
+      <strong>${h(p.title)}</strong>
+      <span class="sr-sub">${h(p.production || p.shootType || '')}</span>
+      <span class="sr-call" data-call>${p.callTime ? `${icon.clock}${firstLog(p) ? `${h(firstLog(p).time)} ${h(firstLog(p).label)} · ` : ''}${h(p.callTime)} 도착 · ${h(p.callPlace || '')}` : ''}</span>
+    </div>
+    <div class="sr-side">
+      <span class="sr-dday">${h(dday(p.date))}</span>
+      ${latest.highChangeCount ? `<span class="sr-chg">변경 ${latest.highChangeCount}</span>` : `<span class="sr-ver">${h(latest.label)}</span>`}
+    </div>
+    ${icon.chevron}
+  </a>`;
+};
+const shootsByMonth = (lib, space, list) => {
+  const groups = new Map();
+  for (const p of list) {
+    const key = p.date ? `${Number(p.date.slice(0, 4))}년 ${Number(p.date.slice(5, 7))}월` : '날짜 미정';
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(p);
+  }
+  return [...groups].map(([k, ps]) => `<h3 class="month">${h(k)}</h3><div class="shoot-list">${ps.map((p) => shootRow(lib, space, p)).join('')}</div>`).join('');
+};
+function splitShoots(lib) {
   const today = new Date(); today.setHours(0, 0, 0, 0);
   const projects = [...lib.index.projects].sort((a, b) => (a.date || '9999').localeCompare(b.date || '9999'));
   const upcoming = projects.filter((p) => !p.date || new Date(p.date + 'T00:00:00') >= today);
   const past = projects.filter((p) => !upcoming.includes(p)).reverse();
-  const [next, ...later] = upcoming;
-  const href = (p) => L(space, p.id);
-
-  // --- 다가오는 촬영 (1건 크게)
-  let featured = '';
-  if (next) {
-    const latest = lib.latest(next);
-    const rec = await lib.getVersion(next.id, latest.id);
-    const a = rec?.analysis || {};
-    featured = `
-    <section class="section home-top">
-      <h2 class="section-title">${icon.flag} 다가오는 촬영</h2>
-      <a class="featured" href="${href(next)}">
-        <div class="f-main">
-          <div class="f-meta"><span class="dday-pill">${h(dday(next.date))}</span><span>${h(prettyDate(next.date, next.weekday))}</span></div>
-          <strong class="f-title">${h(next.title)}</strong>
-          ${next.production ? `<span class="f-prod">${h(next.production)}</span>` : ''}
-          <div class="f-call">
-            <span class="call-label">${icon.camera} 촬영팀 도착</span>
-            <span class="call-time">${h(a.my_call?.time || '—')}</span>
-            <span class="call-place">${icon.pin}${h(a.my_call?.location_name || '')}</span>
-          </div>
-          ${logChain(effLog(next), a.my_call?.time, 'on-dark')}
-          ${a.headline ? flow(a.headline, 'on-dark') : ''}
-          ${latest.highChangeCount ? `<p class="hero-alert">${icon.alert} 최신 ${h(latest.label)} · 중요한 변경 ${latest.highChangeCount}건</p>` : ''}
-          <span class="call-go">브리핑 보기 ${icon.chevron}</span>
-        </div>
-        <div class="f-thumb"><img alt="" data-thumb="${h(next.id)}/${h(latest.id)}"></div>
-      </a>
-    </section>`;
-  } else {
-    featured = `
-    <section class="hero">
-      <p class="eyebrow">CALL SHEET BRIEFING</p>
-      <h1>예정된 촬영이 없어요.</h1>
-      <p class="lead">${canUpload(space) ? '타임테이블 PDF나 사진을 올리면<br>브리핑이 만들어집니다.' : `${h(spaceName(space))}님이 타임테이블을 올리면<br>여기에 나타나요.`}</p>
-    </section>`;
-  }
-
-  // --- 촬영 목록 (한 줄씩, 월별로 묶음)
-  const row = (p) => {
-    const latest = lib.latest(p);
-    const [, m, d] = (p.date || '').split('-').map(Number);
-    return `
-    <a class="shoot-row" href="${href(p)}" data-pid="${h(p.id)}">
-      <div class="sr-date">${p.date ? `<b>${m}.${d}</b><span>${h(p.weekday || '일월화수목금토'[new Date(p.date + 'T00:00:00').getDay()])}</span>` : '<b>미정</b>'}</div>
-      <div class="sr-body">
-        <strong>${h(p.title)}</strong>
-        <span class="sr-sub">${h(p.production || p.shootType || '')}</span>
-        <span class="sr-call" data-call>${p.callTime ? `${icon.clock}${firstLog(p) ? `${h(firstLog(p).time)} ${h(firstLog(p).label)} · ` : ''}${h(p.callTime)} 도착 · ${h(p.callPlace || '')}` : ''}</span>
-      </div>
-      <div class="sr-side">
-        <span class="sr-dday">${h(dday(p.date))}</span>
-        ${latest.highChangeCount ? `<span class="sr-chg">변경 ${latest.highChangeCount}</span>` : `<span class="sr-ver">${h(latest.label)}</span>`}
-      </div>
-      ${icon.chevron}
-    </a>`;
-  };
-  const byMonth = (list) => {
-    const groups = new Map();
-    for (const p of list) {
-      const key = p.date ? `${Number(p.date.slice(0, 4))}년 ${Number(p.date.slice(5, 7))}월` : '날짜 미정';
-      if (!groups.has(key)) groups.set(key, []);
-      groups.get(key).push(p);
-    }
-    return [...groups].map(([k, ps]) => `<h3 class="month">${h(k)}</h3><div class="shoot-list">${ps.map(row).join('')}</div>`).join('');
-  };
-
-  app.innerHTML = shell(`
-    ${featured}
-    ${later.length ? `<section class="section"><h2 class="section-title">${icon.clock} 예정된 촬영 <span class="count">${later.length}</span></h2>${byMonth(later)}</section>` : ''}
-    ${space === mySpace() && canEdit(space) && projects.length ? `<section class="section">
-      <button class="quote-cta" data-action="quote">${icon.doc}<span><b>견적서 다운로드</b><small>일정을 고르고 금액만 넣으면 돼요</small></span>${icon.chevron}</button>
-    </section>` : ''}
-    ${canUpload(space) ? `<section class="section">
-      <div class="dropzone" data-action="upload" id="dropzone">
-        ${icon.upload}
-        <strong>타임테이블 올리기</strong>
-        <span>PDF나 사진·캡처를 끌어다 놓거나 눌러서 선택하세요.<br>PDF는 여러 버전을 한 번에, 사진은 여러 장을 고르면 한 버전으로 묶여요.</span>
-      </div>
-    </section>` : ''}
-    ${past.length ? `<section class="section">
-      <details class="past-box">
-        <summary><span>${icon.history} 지난 촬영</span><span class="count">${past.length}</span>${icon.chevron}</summary>
-        ${byMonth(past)}
-      </details>
-    </section>` : ''}
-  `, { active: 'home' });
-  hydrateThumbs(lib);
-  bindDrop($('#dropzone'));
-
-  // 예전에 올린 촬영은 목록에 도착 시간이 없으니 최신 분석에서 채운다
-  for (const p of later.filter((x) => !x.callTime).slice(0, 20)) {
+  return { projects, upcoming, past };
+}
+// 예전에 올린 촬영은 목록에 도착 시간이 없으니 최신 분석에서 채운다
+function fillCallTimes(lib, list) {
+  for (const p of list.filter((x) => !x.callTime).slice(0, 20)) {
     lib.getVersion(p.id, lib.latest(p).id).then((rec) => {
       const mc = rec?.analysis?.my_call;
       const el = $(`.shoot-row[data-pid="${CSS.escape(p.id)}"] [data-call]`);
       if (mc?.time && el) el.innerHTML = `${icon.clock}${firstLog(p) ? `${h(firstLog(p).time)} ${h(firstLog(p).label)} · ` : ''}${h(mc.time)} 도착 · ${h(mc.location_name || '')}`;
     }).catch(() => {});
   }
+}
+
+// 홈 = 4칸: ① 다가오는 촬영(있을 때) ② 지난 촬영 ③ 타임테이블 올리기 ④ 견적서 다운로드
+async function renderHome(space) {
+  app.innerHTML = shell('<section class="section"><div class="skeleton tall"></div></section>', { active: 'home' });
+  const lib = await getLibrary(space);
+  const { projects, upcoming, past } = splitShoots(lib);
+  const [next, ...later] = upcoming;
+
+  // ① 다가오는 촬영
+  let upTile = '';
+  if (next) {
+    const latest = lib.latest(next);
+    const rec = await lib.getVersion(next.id, latest.id);
+    const a = rec?.analysis || {};
+    upTile = `
+    <div class="tile tile-up">
+      <a class="featured" href="${L(space, next.id)}">
+        <div class="f-main">
+          <p class="tile-label on-dark">${icon.flag} 다가오는 촬영</p>
+          <div class="f-meta"><span class="dday-pill">${h(dday(next.date))}</span><span>${h(prettyDate(next.date, next.weekday))}</span></div>
+          <strong class="f-title">${h(next.title)}</strong>
+          ${next.production ? `<span class="f-prod">${h(next.production)}</span>` : ''}
+          <div class="f-call">
+            <span class="call-label">${icon.camera} 촬영팀 도착</span>
+            <span class="call-time">${h(a.my_call?.time || '—')}</span>
+            ${a.my_call?.location_name ? `<span class="call-place">${icon.pin}${h(a.my_call.location_name)}</span>` : ''}
+          </div>
+          ${logChain(effLog(next), a.my_call?.time, 'on-dark')}
+          ${latest.highChangeCount ? `<p class="hero-alert">${icon.alert} 최신 ${h(latest.label)} · 중요한 변경 ${latest.highChangeCount}건</p>` : ''}
+          <span class="call-go">브리핑 보기 ${icon.chevron}</span>
+        </div>
+        <div class="f-thumb"><img alt="" data-thumb="${h(next.id)}/${h(latest.id)}"></div>
+      </a>
+      ${later.length ? `<p class="tile-sub">그다음 촬영 <span class="count">${later.length}</span></p><div class="shoot-list">${later.map((p) => shootRow(lib, space, p)).join('')}</div>` : ''}
+    </div>`;
+  }
+
+  // ② 지난 촬영
+  const last = past[0];
+  const pastTile = past.length ? `
+    <a class="tile tile-past" href="${L(space)}/past">
+      <span class="t-icon t-gray">${icon.history}</span>
+      <span class="t-body">
+        <b>지난 촬영</b>
+        <small>최근 · ${last.date ? `${Number(last.date.slice(5, 7))}/${Number(last.date.slice(8, 10))} ` : ''}${h(last.title)}</small>
+      </span>
+      <span class="t-num">${past.length}<i>건</i></span>
+      ${icon.chevron}
+    </a>` : '';
+
+  // ③ 타임테이블 올리기 · ④ 견적서 다운로드
+  const upload = canUpload(space) ? `
+    <button type="button" class="tile tile-action" data-action="upload" id="dropzone">
+      <span class="t-icon t-blue">${icon.upload}</span>
+      <span class="t-body"><b>타임테이블<br>올리기</b><small>PDF · 사진 · 캡처</small></span>
+    </button>` : '';
+  const quote = space === mySpace() && canEdit(space) && projects.length ? `
+    <button type="button" class="tile tile-action" data-action="quote">
+      <span class="t-icon t-green">${icon.doc}</span>
+      <span class="t-body"><b>견적서<br>다운로드</b><small>일정 고르고 금액만</small></span>
+    </button>` : '';
+
+  app.innerHTML = shell(`
+    <section class="section home-grid">
+      ${upTile}
+      ${pastTile}
+      ${upload || quote ? `<div class="tile-pair ${upload && quote ? '' : 'single'}">${upload}${quote}</div>` : ''}
+      ${!upTile && !pastTile && !upload && !quote ? `<p class="home-empty">${h(spaceName(space))}님이 타임테이블을 올리면 여기에 나타나요.</p>` : ''}
+    </section>
+  `, { active: 'home' });
+  hydrateThumbs(lib);
+  bindDrop($('#dropzone'));
+  fillCallTimes(lib, later);
+}
+
+// 지난 촬영 목록
+async function renderPast(space) {
+  app.innerHTML = shell('<section class="section"><div class="skeleton tall"></div></section>', { active: 'home' });
+  const lib = await getLibrary(space);
+  const { past } = splitShoots(lib);
+  app.innerHTML = shell(`
+    <section class="section past-page">
+      <a class="back-link" href="${L(space)}">${icon.back} 홈</a>
+      <h1 class="page-title">지난 촬영 <span class="count">${past.length}</span></h1>
+      ${past.length ? shootsByMonth(lib, space, past) : '<p class="muted">지난 촬영이 없어요.</p>'}
+    </section>
+  `, { active: 'home' });
+  fillCallTimes(lib, past);
 }
 
 // ---------------------------------------------------------------- 콘티 크게 보기
