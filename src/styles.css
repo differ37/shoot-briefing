@@ -885,3 +885,30 @@ p, li, .stop-role, .tl-loc, .sr-sub { text-wrap: pretty; }
 .plan-row { grid-template-columns: minmax(0, 1fr) 150px 28px; gap: 6px; }
 .plan-row input { padding-left: 12px; padding-right: 10px; }
 .plan-del { width: 28px; height: 28px; font-size: 16px; }
+
+/* ---------- 여러 날 촬영 · 내 집합 · 숙소 (2026-11-17) ---------- */
+.day-tabs { max-width: 1080px; margin: 14px auto 0; padding: 0 16px; }
+.day-scroll { display: flex; gap: 8px; overflow-x: auto; scrollbar-width: none; }
+.day-scroll::-webkit-scrollbar { display: none; }
+.day-tab { flex: none; display: flex; flex-direction: column; align-items: flex-start; gap: 1px; padding: 9px 16px; border-radius: 16px; border: 1px solid var(--line); background: var(--card); color: var(--text); font: inherit; cursor: pointer; }
+.day-tab b { font-size: 15px; font-weight: 800; }
+.day-tab i { font-style: normal; font-size: 11px; font-weight: 600; color: var(--muted); }
+.day-tab.on { background: var(--text); color: var(--bg); border-color: transparent; }
+.day-tab.on i { color: inherit; opacity: .7; }
+.day-tab.add { justify-content: center; color: var(--accent); background: transparent; border-style: dashed; font-size: 14px; font-weight: 700; }
+.day-tabs.solo .day-scroll { justify-content: flex-end; }
+.day-tabs.solo .day-tab.add { padding: 6px 12px; border-radius: 999px; font-size: 13px; }
+.day-of { font-size: 14px; font-weight: 700; color: var(--muted); margin-left: 4px; }
+.call-top { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.call-edit { flex: none; border: 0; border-radius: 999px; padding: 6px 12px; font: inherit; font-size: 13px; font-weight: 700; background: rgba(255,255,255,0.14); color: #fff; cursor: pointer; }
+.team-pill { margin-left: 6px; padding: 2px 8px; border-radius: 999px; background: #2997ff; color: #fff; font-size: 12px; font-weight: 800; opacity: 1; }
+.call-label:has(.team-pill) { opacity: 1; }
+.call-sheet { margin: 12px 0 0; font-size: 13px; color: rgba(255,255,255,.55); }
+.stay-row { grid-column: 1 / -1; display: flex; flex-direction: column; gap: 4px; margin-top: 2px; padding-top: 16px; border-top: 1px solid rgba(255,255,255,.12); }
+.stay-label { font-size: 13px; font-weight: 700; color: #2997ff; display: inline-flex; align-items: center; gap: 4px; }
+.stay-row strong { font-size: 18px; font-weight: 700; }
+.stay-row > span:not(.stay-label) { font-size: 14px; opacity: .75; }
+.stay-row .nav-btns { margin-top: 8px; }
+.log-presets button.on { background: var(--accent); color: #fff; }
+.sheet-sub { margin: 18px 0 2px; font-size: 16px; font-weight: 800; }
+.day-sheet .share-times input[type=time] { min-width: 0; }

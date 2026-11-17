@@ -233,14 +233,15 @@ export class Library {
    * 내 시간 기록 [{id, label, time}] (버전과 무관하게 촬영 단위로 저장).
    * kind 'log' = 실제로 한 시간(project.log), 'plan' = 미리 계획한 시간(project.plan). 예전 prep(장비집 집합/출발)은 log로 옮긴다
    */
-  async setLog(pid, entries, kind = 'log') {
+  async setLog(pid, entries, kind = 'log', day = '') {
     await this.load();
     const project = this.project(pid);
     if (!project) throw new Error('촬영을 찾을 수 없어요.');
     const key = kind === 'plan' ? 'plan' : 'log';
-    if (entries.length) project[key] = entries;
-    else delete project[key];
-    if (key === 'log') delete project.prep;
+    const t = this.dayObj(project, day);
+    if (entries.length) t[key] = entries;
+    else delete t[key];
+    if (key === 'log' && t === project) delete project.prep;
     await this.saveIndex(`${key === 'plan' ? '계획 시간' : '시간 기록'}: ${project.title}`);
   }
 
@@ -265,13 +266,54 @@ export class Library {
     await this.saveIndex(`촬영일 ${date ? '수정' : '되돌리기'}: ${project.title}`);
   }
 
-  /** 업무 공유 문구에 쓴 값(제목·경로·시간·견적)을 다음에 다시 쓰도록 저장 */
-  async setShare(pid, share) {
+  /** 업무 공유 문구에 쓴 값(제목·경로·시간·견적)을 다음에 다시 쓰도록 저장 (여러 날 촬영이면 그날 것) */
+  async setShare(pid, share, day = '') {
     await this.load();
     const project = this.project(pid);
     if (!project) return;
-    project.share = share;
+    this.dayObj(project, day).share = share;
     await this.saveIndex(`업무 공유 기록: ${project.title}`);
+  }
+
+  /**
+   * 여러 날 촬영: 첫날(촬영일) = project 자체, 다른 날 = project.days['YYYY-MM-DD'].
+   * 둘 다 같은 모양 {plan, log, myCall, stay, share}
+   */
+  dayObj(project, day) {
+    if (!day || day === project.date) return project;
+    project.days ||= {};
+    return (project.days[day] ||= {});
+  }
+
+  /** 촬영에 날짜 더하기 (타임테이블에 적힌 다른 날 / 직접 추가) */
+  async addDays(pid, days) {
+    await this.load();
+    const project = this.project(pid);
+    if (!project) return;
+    const add = days.filter((d) => d && d !== project.date && !project.days?.[d]);
+    if (!add.length) return;
+    add.forEach((d) => this.dayObj(project, d));
+    await this.saveIndex(`촬영 날짜 추가: ${project.title}`);
+  }
+
+  async removeDay(pid, day) {
+    await this.load();
+    const project = this.project(pid);
+    if (!project?.days?.[day]) return;
+    delete project.days[day];
+    if (!Object.keys(project.days).length) delete project.days;
+    await this.saveIndex(`촬영 날짜 빼기: ${project.title}`);
+  }
+
+  /** 그날 내 집합(B팀 등 타임테이블과 다를 때)·숙소. null이면 지움 */
+  async setDayInfo(pid, day, { myCall, stay }) {
+    await this.load();
+    const project = this.project(pid);
+    if (!project) throw new Error('촬영을 찾을 수 없어요.');
+    const t = this.dayObj(project, day);
+    if (myCall) t.myCall = myCall; else delete t.myCall;
+    if (stay) t.stay = stay; else delete t.stay;
+    await this.saveIndex(`내 일정: ${project.title} ${day}`);
   }
 
   /** 장비집 집합/출발 시간 (버전과 무관하게 촬영 단위로 저장) */

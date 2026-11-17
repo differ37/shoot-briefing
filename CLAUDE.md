@@ -91,7 +91,8 @@ npm run build
 - 멤버 공간 = `spaces/<id>/` 아래 같은 구조
 - `users.json` — 계정 목록(아이디·권한만)
 - 버전 JSON(`<vid>.json`): `analysis`, `changes`, (큰 PDF면) `reduced`·`conti`, (콘티 맞춘 뒤) `contiAI`
-- `index.json`의 project: `title, date, weekday, dateFixed, production, versions[], log[], share{}, callTime, callPlace`
+- `index.json`의 project: `title, date, weekday, dateFixed, production, versions[], log[], plan[], share{}, myCall{}, stay{}, callTime, callPlace, days{}`
+  - `days['YYYY-MM-DD'] = {plan, log, myCall, stay, share}` — 여러 날 촬영의 둘째 날부터(첫날 것은 project 바로 아래)
 
 ## 기기(브라우저)에만 저장되는 것 (localStorage / IndexedDB)
 
@@ -125,7 +126,7 @@ npm run build
   - 끝나면 `public/__test/`, .gitignore 줄, IndexedDB(`shoot-briefing`, `shoot-briefing-originals`)·localStorage 테스트 데이터를 지우고 dev 서버를 끈다.
 - **이 컴퓨터에는 Claude API 키가 없다**(`ant` 없음, 환경변수 없음) — 실제 Claude 호출(분석·콘티 맞추기)은 사용자가 휴대폰에서 확인해야 한다.
   로그인 비밀번호가 필요한 흐름(실제 로그인, 사용자 관리)도 직접 테스트할 수 없다.
-- 배포 후 확인을 부탁할 때는 `?v=N`을 붙인 주소를 준다(GitHub Pages가 HTML을 10분 캐시). **지금까지 v=23까지 썼다** → 다음은 v=24.
+- 배포 후 확인을 부탁할 때는 `?v=N`을 붙인 주소를 준다(GitHub Pages가 HTML을 10분 캐시). **지금까지 v=24까지 썼다** → 다음은 v=25.
 - 사용자는 모바일(아이폰)로 주로 본다. 새 화면은 390px 폭에서 줄바꿈·넘침을 꼭 확인할 것.
 - push(=배포)는 사용자가 "배포해줘"라고 할 때. 사용자가 휴대폰으로 테스트하며 버그를 알려주는 경우엔 고친 뒤 바로 배포해 왔다.
 - 사용자에게는 한국어로, 쉬운 말로 설명한다(개발 용어 최소화). 커밋 메시지는 한국어.
@@ -189,6 +190,20 @@ npm run build
   휠 바깥을 누르면 그 터치가 창 바깥(backdrop)으로 전달돼 창이 닫혔다 → **날짜·시간 칸이 있는 창(촬영일·실제 기록·계획·업무 공유)은 바깥 눌러도 안 닫힘**(취소/닫기만). 새 창을 만들 때도 지킬 것.
 - 로컬 화면 시험 도구를 `_localtest/`(커밋 안 함)에 보관 — 사용법은 `_localtest/README.md`. 390px 스크린샷 + 창 열기·입력·노션 호출 가로채기 훅.
 
+### 2026-11-17 (v=24) — B팀·여러 날 촬영·숙소
+- 계기: Stray Kids MV 타임테이블(1119-1120)이 이틀치(11/19 DAY2 + 11/20 DAY3)이고, 사용자는 **B팀이라 타임테이블 집합(08:00)과 다른 시간(17:30 광릉초)에 투입**.
+- **내 집합** `openDaySheet`: 도착 카드의 "내 집합 · 숙소"(설정 후 "고치기") → 팀(A/B/C 칩 또는 직접), 내 집합 시간, 장소(타임테이블 촬영지 칩 → 이름·주소 채움), 숙소 이름·주소.
+  저장 `day.myCall={team,time,place,address}`, `day.stay={name,address}` (`lib.setDayInfo`). 카드: "내 집합 B팀 17:30 광릉초…" + 흐린 "타임테이블 08:00 · 나사…", 숙소 줄(길찾기 버튼 따로).
+  다음 날 카드엔 "전날 숙소"도 보임. "타임테이블대로"로 되돌림. 버전 변경 배지는 타임테이블 그대로일 때만. 홈 카드·목록도 내 집합 우선(`callOf`).
+- **여러 날** `shootDays`: 촬영일 + `project.days` 키 + 타임테이블 글에 적힌 뒷날(`sheetDays`: call_times·locations·moves·briefing의 `M/D`, 촬영일 뒤 1~6일, `–11/21 03:00`·`익일` 같은 밤샘 끝 시각은 제외).
+  브리핑에 날 탭(`.day-tabs`, "+ 날짜"로 직접 추가 `openAddDaySheet`, 직접 추가한 날만 "이 날 빼기"). 탭 고르면 **내 시간 기록·계획·실제·업무 공유·도착 카드**가 그날 것.
+  첫날 데이터는 그대로 project 바로 아래(예전 데이터 호환), 다른 날은 `project.days[날짜]` — `dayRec(project, day)`, `lib.dayObj`. `setLog/setShare(..., day)`.
+  업무 공유도 날마다 따로(노션 기록도 날마다 한 덩어리). 타임테이블에서 찾은 뒷날은 편집 권한으로 브리핑을 열 때 `days`에 빈 칸으로 저장(`addDays`) → 홈에서 마지막 날까지 '다가오는 촬영'.
+  홈은 늘 날짜 기준(오늘/다음 촬영일)의 날을 보여주고, 브리핑의 날 탭 선택(`dayPick`, 메모리)은 브리핑에만.
+- 둘째 날 기본 집합은 타임테이블 call_times 중 그 날짜(`11/20`)가 적힌 촬영팀 항목.
+- 견적서 창은 아직 촬영 1건 = 하루로 본다(여러 날 촬영을 DAY 여러 줄로 나누는 건 안 함 — 필요하면 다음 작업).
+- 시험: `_localtest/shot_real.mjs`(실제 촬영 1건 index 항목+버전 JSON을 넣고 찍기).
+
 ## 사용자 취향 (작업 방식)
 
 - 깔끔하고 트렌디한 카드형 UI 선호, 군더더기 안내 문구 싫어함. 폰(아이폰, 다크 모드)으로 보고 스크린샷으로 요청한다.
@@ -197,6 +212,7 @@ npm run build
 
 ## 확인 대기 / 다음 후보
 
+- [ ] (v=24) B팀 내 집합·숙소·11/20 둘째 날 기록이 폰에서 잘 되는지
 - [ ] 휴대폰 원본 PDF → 공유 창에 Acrobat이 뜨고 열리는지 (명시적 확인은 아직)
 - [ ] 업무 공유 → 노션 기록을 실제로 써 봤는지 (Worker는 실제 노션으로 기록·교체·충돌·삭제 시험 완료). 11/12 비트펠라하우스는 노션에 이미 손으로 적혀 있어 공유 누르면 중복됨
 - [ ] 원본 PDF 기기 보관(로그아웃하면 지워짐) — 기존 Buick 버전은 "원본 파일 선택"으로 한 번 골라야 함

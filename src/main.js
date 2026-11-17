@@ -182,13 +182,75 @@ const lateMin = (plan, actual) => {
   return d;
 };
 // 촬영팀 도착 전까지의 기록 → 촬영팀 도착 (홈·도착 카드용 요약)
-const logChain = (entries, callTime, cls = '') => {
+const logChain = (entries, callTime, cls = '', arrive = '촬영팀 도착') => {
   const before = entries.filter((e) => e.time && (!callTime || !/^\d{1,2}:\d{2}$/.test(callTime) || e.time <= callTime)).slice(-3);
   if (!before.length) return '';
-  const steps = [...before.map((e) => [e.planned ? `${e.label} 예정` : e.label, e.time, e.planned]), ['촬영팀 도착', callTime || '—']];
+  const steps = [...before.map((e) => [e.planned ? `${e.label} 예정` : e.label, e.time, e.planned]), [arrive, callTime || '—']];
   return `<ol class="chain ${cls}">${steps.map(([label, t, planned], i) => `<li class="${i === steps.length - 1 ? 'arrive' : planned ? 'planned' : ''}"><span>${h(label)}</span><b>${h(t)}</b></li>`).join('')}</ol>`;
 };
-const firstLog = (p) => effLog(p)[0];
+
+// ---- 여러 날 촬영 (2026-11-17)
+// 첫날(촬영일) = project 자체, 다른 날 = project.days['YYYY-MM-DD'] — 둘 다 같은 모양 {plan, log, myCall, stay, share}
+const dayRec = (project, day) => (!day || day === project.date ? project : project.days?.[day] || {});
+const ymd = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+const wdOf = (date) => '일월화수목금토'[new Date(date + 'T00:00:00').getDay()];
+const md = (date) => `${Number(date.slice(5, 7))}/${Number(date.slice(8, 10))}`;
+const mdRe = (date) => new RegExp(`(^|[^\\d/])${md(date)}(?![\\d/])`);
+// 타임테이블에 뒷날(예: "11/20 DAY 3")도 적혀 있으면 그 날짜들 (촬영일 뒤 6일 안)
+const sheetDays = (a, base) => {
+  if (!a || !base) return [];
+  const text = JSON.stringify([a.call_times, a.locations, a.moves, a.briefing]);
+  const out = new Set();
+  for (const m of text.matchAll(/(?<![\d/])(\d{1,2})\/(\d{1,2})(?![\d/])/g)) {
+    if (/([–~-]|익일)\s*$/.test(text.slice(Math.max(0, m.index - 4), m.index))) continue;
+    const mo = Number(m[1]), d = Number(m[2]);
+    if (mo < 1 || mo > 12 || d < 1 || d > 31) continue;
+    for (const y of [Number(base.slice(0, 4)), Number(base.slice(0, 4)) + 1]) {
+      const day = `${y}-${String(mo).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+      const diff = (new Date(day + 'T00:00:00') - new Date(base + 'T00:00:00')) / 864e5;
+      if (diff > 0 && diff <= 6) out.add(day);
+    }
+  }
+  return [...out];
+};
+const shootDays = (project, a) => [...new Set([project.date, ...Object.keys(project.days || {}), ...sheetDays(a, project.date)].filter(Boolean))].sort();
+const lastDay = (p) => shootDays(p).pop() || p.date;
+// 촬영별로 고른 날 (다른 화면에 갔다 와도 유지). 안 골랐으면 오늘 또는 다음 촬영일
+const dayPick = new Map();
+// 홈에서는 늘 날짜 기준(오늘·다음 촬영일), 브리핑에서는 고른 날
+const activeDay = (project, days = shootDays(project), usePick = false) => {
+  const pick = usePick && dayPick.get(project.id);
+  if (pick && days.includes(pick)) return pick;
+  const today = ymd(new Date());
+  return days.find((d) => d >= today) || days[0] || project.date;
+};
+// 타임테이블에 적힌 그날의 촬영팀 집합 {time, place, address}
+const sheetCall = (a, project, day) => {
+  if (!a) return day === project.date ? { time: project.callTime, place: project.callPlace } : {};
+  const locs = a.locations || [];
+  const near = (name) => locs.find((l) => l.name && name && (l.name.includes(name) || name.includes(l.name)));
+  if (!day || day === project.date) {
+    const mc = a.my_call || {};
+    const loc = near(mc.location_name) || locs[0] || {};
+    return { time: mc.time, place: mc.location_name || loc.name, address: mc.address || loc.address, note: mc.note };
+  }
+  const re = mdRe(day);
+  const calls = (a.call_times || []).filter((c) => re.test(`${c.team} ${c.note} ${c.location_name}`));
+  const c = calls.find((x) => x.is_camera_team) || calls[0];
+  if (!c) return {};
+  return { time: c.time, place: c.location_name, address: near(c.location_name)?.address || '', note: c.note };
+};
+// 그날 내가 갈 시간·장소: 직접 정한 "내 집합"(B팀 등)이 있으면 그것, 없으면 타임테이블
+const callOf = (project, a, day) => {
+  const sheet = sheetCall(a, project, day);
+  const mine = dayRec(project, day).myCall;
+  if (mine?.time || mine?.place) {
+    const loc = !mine.address && (a?.locations || []).find((l) => l.name && mine.place && (l.name.includes(mine.place) || mine.place.includes(l.name)));
+    return { ...mine, address: mine.address || loc?.address || '', mine: true, sheet };
+  }
+  return { ...sheet, sheet };
+};
+const firstLog = (p) => effLog(dayRec(p, activeDay(p)))[0];
 
 const isPlaceholderPhone = (p) => !p || /0000-?0000/.test(p);
 const telHref = (p) => 'tel:' + String(p).replace(/[^\d+]/g, '');
@@ -403,7 +465,7 @@ const shootRow = (lib, space, p) => {
     <div class="sr-body">
       <strong>${h(p.title)}</strong>
       <span class="sr-sub">${h(p.production || p.shootType || '')}</span>
-      <span class="sr-call" data-call>${p.callTime ? `${icon.clock}${firstLog(p) ? `${h(firstLog(p).time)} ${h(firstLog(p).label)} · ` : ''}${h(p.callTime)} 도착 · ${h(p.callPlace || '')}` : ''}</span>
+      <span class="sr-call" data-call>${rowCallText(p)}</span>
     </div>
     <div class="sr-side">
       <span class="sr-dday">${h(dday(p.date))}</span>
@@ -411,6 +473,12 @@ const shootRow = (lib, space, p) => {
     </div>
     ${icon.chevron}
   </a>`;
+};
+const rowCallText = (p, a) => {
+  const c = callOf(p, a, activeDay(p));
+  if (!c.time) return '';
+  const f = firstLog(p);
+  return `${icon.clock}${f ? `${h(f.time)} ${h(f.label)} · ` : ''}${h(c.time)} ${c.mine ? '집합' : '도착'} · ${h(c.place || '')}`;
 };
 const shootsByMonth = (lib, space, list) => {
   const groups = new Map();
@@ -424,7 +492,8 @@ const shootsByMonth = (lib, space, list) => {
 function splitShoots(lib) {
   const today = new Date(); today.setHours(0, 0, 0, 0);
   const projects = [...lib.index.projects].sort((a, b) => (a.date || '9999').localeCompare(b.date || '9999'));
-  const upcoming = projects.filter((p) => !p.date || new Date(p.date + 'T00:00:00') >= today);
+  // 여러 날 촬영은 마지막 날까지 '다가오는 촬영'
+  const upcoming = projects.filter((p) => !p.date || new Date(lastDay(p) + 'T00:00:00') >= today);
   const past = projects.filter((p) => !upcoming.includes(p)).reverse();
   return { projects, upcoming, past };
 }
@@ -432,9 +501,9 @@ function splitShoots(lib) {
 function fillCallTimes(lib, list) {
   for (const p of list.filter((x) => !x.callTime).slice(0, 20)) {
     lib.getVersion(p.id, lib.latest(p).id).then((rec) => {
-      const mc = rec?.analysis?.my_call;
       const el = $(`.shoot-row[data-pid="${CSS.escape(p.id)}"] [data-call]`);
-      if (mc?.time && el) el.innerHTML = `${icon.clock}${firstLog(p) ? `${h(firstLog(p).time)} ${h(firstLog(p).label)} · ` : ''}${h(mc.time)} 도착 · ${h(mc.location_name || '')}`;
+      const text = rec?.analysis ? rowCallText(p, rec.analysis) : '';
+      if (text && el) el.innerHTML = text;
     }).catch(() => {});
   }
 }
@@ -452,20 +521,23 @@ async function renderHome(space) {
     const latest = lib.latest(next);
     const rec = await lib.getVersion(next.id, latest.id);
     const a = rec?.analysis || {};
+    const nDays = shootDays(next, a);
+    const nDay = activeDay(next, nDays);
+    const nc = callOf(next, a, nDay);
     upTile = `
     <div class="tile tile-up">
       <a class="featured" href="${L(space, next.id)}">
         <div class="f-main">
           <p class="tile-label on-dark">${icon.flag} 다가오는 촬영</p>
-          <div class="f-meta"><span class="dday-pill">${h(dday(next.date))}</span><span>${h(prettyDate(next.date, next.weekday))}</span></div>
+          <div class="f-meta"><span class="dday-pill">${h(dday(nDay))}</span><span>${h(prettyDate(nDay, wdOf(nDay)))}${nDays.length > 1 ? ` · ${nDays.indexOf(nDay) + 1}일차` : ''}</span></div>
           <strong class="f-title">${h(next.title)}</strong>
           ${next.production ? `<span class="f-prod">${h(next.production)}</span>` : ''}
           <div class="f-call">
-            <span class="call-label">${icon.camera} 촬영팀 도착</span>
-            <span class="call-time">${h(a.my_call?.time || '—')}</span>
-            ${a.my_call?.location_name ? `<span class="call-place">${icon.pin}${h(a.my_call.location_name)}</span>` : ''}
+            <span class="call-label">${icon.camera} ${nc.mine ? '내 집합' : '촬영팀 도착'}${nc.team ? `<b class="team-pill">${h(nc.team)}</b>` : ''}</span>
+            <span class="call-time">${h(nc.time || '—')}</span>
+            ${nc.place ? `<span class="call-place">${icon.pin}${h(nc.place)}</span>` : ''}
           </div>
-          ${logChain(effLog(next), a.my_call?.time, 'on-dark')}
+          ${logChain(effLog(dayRec(next, nDay)), nc.time, 'on-dark', nc.mine ? '현장 집합' : '촬영팀 도착')}
           ${latest.highChangeCount ? `<p class="hero-alert">${icon.alert} 최신 ${h(latest.label)} · 중요한 변경 ${latest.highChangeCount}건</p>` : ''}
           <span class="call-go">브리핑 보기 ${icon.chevron}</span>
         </div>
@@ -582,6 +654,13 @@ async function renderProject(space, pid, vid) {
   // 직접 고친 촬영일이 있으면 그걸, 없으면 이 버전 타임테이블에 적힌 날짜
   const shootDate = project.dateFixed ? project.date : prod.shoot_date || project.date;
   const shootWeekday = project.dateFixed ? project.weekday : prod.weekday;
+  // 여러 날 촬영: 타임테이블에 적힌 뒷날은 목록에 저장해 둔다(홈에서 마지막 날까지 '다가오는 촬영')
+  const days = shootDays(project, a);
+  const missing = days.filter((d) => d !== project.date && !project.days?.[d]);
+  if (missing.length && canEdit(space)) lib.addDays(pid, missing).catch(() => {});
+  const day = activeDay(project, days, true);
+  const dr = dayRec(project, day);
+  const multi = days.length > 1;
 
   // --- 히어로
   const hero = `
@@ -644,22 +723,42 @@ async function renderProject(space, pid, vid) {
       <button class="btn nav kakao" data-nav="kakao" data-loc="${idx}">${icon.kakao}${kakaoKey() ? '카카오내비' : '카카오맵'}</button>
       <button class="btn nav copy" data-copy="${h(loc.address || loc.name || '')}" aria-label="주소 복사">${icon.copy}</button>
     </div>`;
-  const navTargets = [{ name: mc.location_name || myLoc.name, address: myAddr }, ...locs];
+  const call = callOf(project, a, day);
+  const sm = day === project.date && !call.mine; // 타임테이블 그대로일 때만 버전 변경 표시
+  const callAddr = call.address || (sm ? myAddr : '');
+  const prevDay = days[days.indexOf(day) - 1];
+  const stays = [
+    prevDay && dayRec(project, prevDay).stay ? ['전날 숙소', dayRec(project, prevDay).stay] : null,
+    dr.stay ? ['숙소', dr.stay] : null,
+  ].filter(Boolean);
+  const navTargets = [{ name: call.place, address: callAddr }, ...locs, ...stays.map(([, st]) => ({ name: st.name, address: st.address }))];
+  const stayHtml = stays.map(([label, st], k) => `
+        <div class="stay-row">
+          <span class="stay-label">${icon.pin} ${label}</span>
+          <strong>${h(st.name || st.address)}</strong>
+          ${st.name && st.address ? `<span>${h(st.address)}</span>` : ''}
+          ${navBtns(st, locs.length + 1 + k)}
+        </div>`).join('');
 
   const myCall = `
   <section class="section" id="sec-call">
     <div class="call-card">
       <div class="call-main">
-        ${logChain(effLog(project), mc.time, 'on-dark')}
-        <span class="call-label">${icon.camera} 촬영팀 도착</span>
-        <div class="call-time-xl">${h(mc.time || '—')}${marks.myCall.time ? `<span class="badge chg">변경</span><span class="before">${h(marks.myCall.time)}</span>` : ''}</div>
-        <div class="call-where">
-          <strong>${h(mc.location_name || myLoc.name || '')}</strong>${marks.myCall.location ? badge({ type: 'changed', before: marks.myCall.location }) : ''}
-          <span>${h(myAddr)}</span>${marks.myCall.address ? badge({ type: 'changed', before: marks.myCall.address }) : ''}
+        ${logChain(effLog(dr), call.time, 'on-dark', call.mine ? '현장 집합' : '촬영팀 도착')}
+        <div class="call-top">
+          <span class="call-label">${icon.camera} ${call.mine ? '내 집합' : '촬영팀 도착'}${call.team ? `<b class="team-pill">${h(call.team)}</b>` : ''}${multi ? ` · ${h(md(day))} ${h(wdOf(day))}` : ''}</span>
+          ${canEdit(space) ? `<button type="button" class="call-edit" data-myday>${call.mine || dr.stay ? '고치기' : '내 집합 · 숙소'}</button>` : ''}
         </div>
-        ${mc.note ? para(mc.note, 'call-note') : ''}
+        <div class="call-time-xl">${h(call.time || '—')}${sm && marks.myCall.time ? `<span class="badge chg">변경</span><span class="before">${h(marks.myCall.time)}</span>` : ''}</div>
+        <div class="call-where">
+          <strong>${h(call.place || '')}</strong>${sm && marks.myCall.location ? badge({ type: 'changed', before: marks.myCall.location }) : ''}
+          <span>${h(callAddr)}</span>${sm && marks.myCall.address ? badge({ type: 'changed', before: marks.myCall.address }) : ''}
+        </div>
+        ${call.mine && (call.sheet.time || call.sheet.place) ? `<p class="call-sheet">타임테이블 ${h([call.sheet.time, call.sheet.place].filter(Boolean).join(' · '))}</p>` : ''}
+        ${!call.mine && call.note ? para(call.note, 'call-note') : ''}
       </div>
-      ${navBtns({ name: mc.location_name, address: myAddr }, 0)}
+      ${navBtns({ name: call.place, address: callAddr }, 0)}
+      ${stayHtml}
     </div>
     <div class="stats">
       <div class="stat"><span>촬영지</span><strong>${locs.length}곳</strong></div>
@@ -819,7 +918,7 @@ async function renderProject(space, pid, vid) {
   </section>`;
 
   // --- 내 시간 기록 (계획 ↔ 실제) + 업무 공유
-  const rows = logRows(project);
+  const rows = logRows(dr);
   const edit = canEdit(space);
   const gap = (r) => {
     const d = r.plan && r.log ? lateMin(r.plan.time, r.log.time) : null;
@@ -838,7 +937,7 @@ async function renderProject(space, pid, vid) {
   const logHtml = edit || rows.length ? `
   <section class="section" id="sec-log">
     <div class="card log-card">
-      <div class="card-head">${icon.clock}<h2>내 시간 기록</h2></div>
+      <div class="card-head">${icon.clock}<h2>내 시간 기록${multi ? ` <small class="day-of">${h(md(day))} ${h(wdOf(day))}</small>` : ''}</h2></div>
       ${rows.length ? `<div class="lg-table">
         <div class="lg-row lg-head"><span>무엇</span><span>계획</span><span>실제</span><span></span></div>
         ${rows.map((r) => `<div class="lg-row"><span class="lg-label">${h(r.label)}</span>${cell(r, 'plan')}${cell(r, 'log')}${gap(r)}</div>`).join('')}
@@ -851,6 +950,13 @@ async function renderProject(space, pid, vid) {
     </div>
   </section>` : '';
 
+  // --- 날 고르기 (여러 날 촬영) — 기록·도착 카드가 고른 날 것으로 바뀐다
+  const dayTabs = multi || canEdit(space) ? `
+  <div class="day-tabs ${multi ? '' : 'solo'}"><div class="day-scroll">
+    ${multi ? days.map((d, i) => `<button type="button" class="day-tab ${d === day ? 'on' : ''}" data-day="${h(d)}"><b>${h(md(d))} ${h(wdOf(d))}</b><i>${i + 1}일차</i></button>`).join('') : ''}
+    ${canEdit(space) ? `<button type="button" class="day-tab add" data-day-add>+ 날짜</button>` : ''}
+  </div></div>` : '';
+
   // --- 바로가기 (있는 칸만)
   const jumps = [
     ['sec-log', '기록', logHtml], ['sec-changes', '변경', changesHtml], ['sec-call', '도착', myCall], ['sec-brief', '브리핑', a.briefing],
@@ -859,20 +965,27 @@ async function renderProject(space, pid, vid) {
   ].filter(([, , has]) => has);
   const jumpBar = `<nav class="jump-bar" aria-label="바로가기"><div class="jump-scroll">${jumps.map(([id, label]) => `<a href="#${id}" data-jump="${id}">${label}</a>`).join('')}</div></nav>`;
 
-  app.innerHTML = shell(hero + switcher + jumpBar + logHtml + changesHtml + myCall + routeHtml + callsHtml + schedHtml + checksHtml + contactsHtml + historyHtml);
+  app.innerHTML = shell(hero + switcher + jumpBar + dayTabs + logHtml + changesHtml + myCall + routeHtml + callsHtml + schedHtml + checksHtml + contactsHtml + historyHtml);
   bindJumpBar();
   hydrateThumbs(lib);
-  $$('[data-log-add]').forEach((b) => b.addEventListener('click', () => openLogSheet(lib, project, null)));
+  $$('[data-log-add]').forEach((b) => b.addEventListener('click', () => openLogSheet(lib, project, null, 'log', '', day)));
+  $$('[data-day]').forEach((b) => b.addEventListener('click', () => {
+    dayPick.set(project.id, b.dataset.day);
+    const y = window.scrollY;
+    route().then(() => window.scrollTo(0, y));
+  }));
+  $('[data-day-add]')?.addEventListener('click', () => openAddDaySheet(lib, project, days));
+  $('[data-myday]')?.addEventListener('click', () => openDaySheet(lib, project, a, day, days));
   $('[data-date-edit]')?.addEventListener('click', () => openDateSheet(lib, project, shootDate, prod.shoot_date));
   $$('[data-log-edit]').forEach((b) => b.addEventListener('click', () => {
     const [kind, i] = b.dataset.logEdit.split(':');
-    if (kind === 'plan') return openPlanSheet(lib, project, planOf(project)[Number(i)]?.label);
-    openLogSheet(lib, project, Number(i), kind);
+    if (kind === 'plan') return openPlanSheet(lib, project, planOf(dr)[Number(i)]?.label, day);
+    openLogSheet(lib, project, Number(i), kind, '', day);
   }));
-  $('[data-plan-add]')?.addEventListener('click', () => openPlanSheet(lib, project));
-  $$('[data-plan-for]').forEach((b) => b.addEventListener('click', () => openPlanSheet(lib, project, b.dataset.planFor)));
-  $$('[data-log-now]').forEach((b) => b.addEventListener('click', () => openLogSheet(lib, project, null, 'log', b.dataset.logNow)));
-  $('[data-share-work]')?.addEventListener('click', () => openShareSheet(lib, project, a, canEdit(space)));
+  $('[data-plan-add]')?.addEventListener('click', () => openPlanSheet(lib, project, '', day));
+  $$('[data-plan-for]').forEach((b) => b.addEventListener('click', () => openPlanSheet(lib, project, b.dataset.planFor, day)));
+  $$('[data-log-now]').forEach((b) => b.addEventListener('click', () => openLogSheet(lib, project, null, 'log', b.dataset.logNow, day)));
+  $('[data-share-work]')?.addEventListener('click', () => openShareSheet(lib, project, a, canEdit(space), day));
 
   // 이벤트
   $$('[data-nav]').forEach((b) => b.addEventListener('click', () => {
@@ -1187,9 +1300,10 @@ const LOG_PRESETS = ['사무실 집합', '장비집 집합', '장비집 출발',
 const nowHM = () => new Date().toTimeString().slice(0, 5);
 
 // 시간 기록 추가/수정 (index가 null이면 새로 추가). kind 'log' = 실제 시간, 'plan' = 계획 시간. preset = 미리 채울 이름
-function openLogSheet(lib, project, index, kind = 'log', preset = '') {
+function openLogSheet(lib, project, index, kind = 'log', preset = '', day = '') {
   const isPlan = kind === 'plan';
-  const entries = (isPlan ? planOf(project) : logOf(project)).map((e) => ({ ...e }));
+  const dr = dayRec(project, day);
+  const entries = (isPlan ? planOf(dr) : logOf(dr)).map((e) => ({ ...e }));
   const cur = index == null ? null : entries[index];
   // 같은 이름이 이미 있으면 번호를 붙여 제안 ("현장 도착" → "현장2 도착")
   const suggest = (base) => {
@@ -1199,7 +1313,7 @@ function openLogSheet(lib, project, index, kind = 'log', preset = '') {
     return n ? `${place}${n + 1} ${act}` : base;
   };
   // 실제 기록: 같은 이름의 계획이 있으면 보여준다
-  const planned = !isPlan && planOf(project).find((e) => normLabel(e.label) === normLabel(cur?.label || preset));
+  const planned = !isPlan && planOf(dr).find((e) => normLabel(e.label) === normLabel(cur?.label || preset));
   const el = document.createElement('div');
   el.className = 'sheet-backdrop';
   el.innerHTML = `
@@ -1230,7 +1344,7 @@ function openLogSheet(lib, project, index, kind = 'log', preset = '') {
   const save = async (next, msg) => {
     $$('button', form).forEach((b) => (b.disabled = true));
     try {
-      await lib.setLog(project.id, next, kind);
+      await lib.setLog(project.id, next, kind, day);
       close();
       toast(msg);
       route();
@@ -1250,11 +1364,128 @@ function openLogSheet(lib, project, index, kind = 'log', preset = '') {
   });
 }
 
+// 그날 내 집합(B팀처럼 타임테이블과 다르게 들어갈 때)·숙소
+function openDaySheet(lib, project, a, day, days) {
+  const dr = dayRec(project, day);
+  const sheet = sheetCall(a, project, day);
+  const mine = dr.myCall || {};
+  const stay = dr.stay || {};
+  const places = [];
+  for (const l of a?.locations || []) if (l.name && !places.some((x) => x.name === l.name)) places.push(l);
+  const manual = day !== project.date && !sheetDays(a, project.date).includes(day);
+  const el = document.createElement('div');
+  el.className = 'sheet-backdrop';
+  el.innerHTML = `
+  <form class="sheet log-sheet day-sheet form" autocomplete="off">
+    <p class="eyebrow">${h(project.title)}</p>
+    <h2>${h(md(day))} ${h(wdOf(day))} 내 일정</h2>
+    ${sheet.time || sheet.place ? `<p class="muted small">타임테이블 ${h([sheet.time, sheet.place].filter(Boolean).join(' · '))}</p>` : ''}
+    <div class="log-presets">${['A팀', 'B팀', 'C팀'].map((t) => `<button type="button" data-team="${t}" class="${mine.team === t ? 'on' : ''}">${t}</button>`).join('')}</div>
+    <div class="share-times">
+      <label>팀<input name="team" value="${h(mine.team || '')}" placeholder="예: B팀" maxlength="12"></label>
+      <label>내 집합 시간<input type="time" name="time" value="${h(mine.time || '')}"></label>
+    </div>
+    ${places.length ? `<div class="log-presets">${places.map((l, i) => `<button type="button" data-place="${i}">${h(l.name)}</button>`).join('')}</div>` : ''}
+    <label>집합 장소<input name="place" value="${h(mine.place || '')}" placeholder="${h(sheet.place || '예: 광릉초등학교')}" maxlength="40"></label>
+    <label>주소<input name="address" value="${h(mine.address || '')}" placeholder="비우면 장소 이름으로 찾아요"></label>
+    <h3 class="sheet-sub">숙박 <span class="opt">이날 밤 묵는 곳</span></h3>
+    <label>숙소 이름<input name="stayName" value="${h(stay.name || '')}" placeholder="예: 진접 ○○호텔" maxlength="40"></label>
+    <label>숙소 주소<input name="stayAddress" value="${h(stay.address || '')}" placeholder="내비로 바로 갈 수 있어요"></label>
+    <div class="sheet-actions">
+      ${dr.myCall ? '<button type="button" class="btn ghost" data-reset>타임테이블대로</button>' : manual ? '<button type="button" class="btn ghost danger" data-drop>이 날 빼기</button>' : ''}
+      <span class="spacer"></span>
+      <button type="button" class="btn ghost" data-cancel>취소</button>
+      <button type="submit" class="btn">저장</button>
+    </div>
+  </form>`;
+  document.body.appendChild(el);
+  requestAnimationFrame(() => el.classList.add('show'));
+  const close = () => { el.classList.remove('show'); setTimeout(() => el.remove(), 300); };
+  const form = $('form', el);
+  const f = form.elements;
+  el.addEventListener('click', (e) => {
+    if (e.target.closest('[data-cancel]')) return close();
+    const t = e.target.closest('[data-team]');
+    if (t) {
+      f.team.value = f.team.value === t.dataset.team ? '' : t.dataset.team;
+      $$('[data-team]', form).forEach((b) => b.classList.toggle('on', b.dataset.team === f.team.value));
+    }
+    const pl = e.target.closest('[data-place]');
+    if (pl) { const l = places[Number(pl.dataset.place)]; f.place.value = l.name; f.address.value = l.address || ''; }
+  });
+  const save = async (fn, msg) => {
+    $$('button', form).forEach((b) => (b.disabled = true));
+    try {
+      await fn();
+      close();
+      toast(msg);
+      route();
+    } catch (err) {
+      toast(err.status === 403 || err.status === 404 ? '저장 권한이 없어요' : err.message);
+      $$('button', form).forEach((b) => (b.disabled = false));
+    }
+  };
+  $('[data-reset]', form)?.addEventListener('click', () => save(() => lib.setDayInfo(project.id, day, { myCall: null, stay: dr.stay || null }), '타임테이블 시간으로 되돌렸어요'));
+  $('[data-drop]', form)?.addEventListener('click', () => save(async () => { await lib.removeDay(project.id, day); dayPick.delete(project.id); }, `${md(day)}을 뺐어요`));
+  form.addEventListener('submit', (e) => {
+    e.preventDefault();
+    const v = Object.fromEntries(new FormData(form));
+    const t = (k) => String(v[k] || '').trim();
+    const myCall = t('time') || t('place') ? { team: t('team'), time: t('time'), place: t('place') || sheet.place || '', address: t('address') || (!t('place') ? sheet.address || '' : '') } : null;
+    if (myCall && !myCall.time) return toast('내 집합 시간을 골라 주세요');
+    if (myCall) for (const k of ['team', 'address']) if (!myCall[k]) delete myCall[k];
+    const stayV = t('stayName') || t('stayAddress') ? { name: t('stayName'), address: t('stayAddress') } : null;
+    save(() => lib.setDayInfo(project.id, day, { myCall, stay: stayV }), '저장했어요');
+  });
+}
+
+// 촬영에 날짜 더하기 (타임테이블에 안 적힌 날도 따로 기록하고 싶을 때)
+function openAddDaySheet(lib, project, days) {
+  const last = days[days.length - 1] || project.date;
+  const next = last ? ymd(new Date(new Date(last + 'T00:00:00').getTime() + 864e5)) : '';
+  const el = document.createElement('div');
+  el.className = 'sheet-backdrop';
+  el.innerHTML = `
+  <form class="sheet form" autocomplete="off">
+    <p class="eyebrow">${h(project.title)}</p>
+    <h2>날짜 더하기</h2>
+    <label>날짜<input type="date" name="date" value="${h(next)}" required></label>
+    <div class="sheet-actions">
+      <span class="spacer"></span>
+      <button type="button" class="btn ghost" data-cancel>취소</button>
+      <button type="submit" class="btn">더하기</button>
+    </div>
+  </form>`;
+  document.body.appendChild(el);
+  requestAnimationFrame(() => el.classList.add('show'));
+  const close = () => { el.classList.remove('show'); setTimeout(() => el.remove(), 300); };
+  const form = $('form', el);
+  el.addEventListener('click', (e) => { if (e.target.closest('[data-cancel]')) close(); });
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const date = new FormData(form).get('date');
+    if (!date) return toast('날짜를 골라 주세요');
+    if (days.includes(date)) { dayPick.set(project.id, date); close(); return route(); }
+    $$('button', form).forEach((b) => (b.disabled = true));
+    try {
+      await lib.addDays(project.id, [date]);
+      dayPick.set(project.id, date);
+      close();
+      toast(`${md(date)} ${wdOf(date)}을 더했어요`);
+      route();
+    } catch (err) {
+      toast(err.status === 403 || err.status === 404 ? '저장 권한이 없어요' : err.message);
+      $$('button', form).forEach((b) => (b.disabled = false));
+    }
+  });
+}
+
 // 계획 시간 (한 번에 여러 줄): 기본 3줄(장비집 도착·장비집 출발·현장 도착) + "추가"로 이름·시간 직접.
 // 시간을 넣으면 시간 순서대로 저절로 자리를 옮긴다. 시간이 빈 줄은 저장하지 않는다.
 const PLAN_DEFAULTS = ['장비집 도착', '장비집 출발', '현장 도착'];
-function openPlanSheet(lib, project, focusLabel = '') {
-  const rows = planOf(project).map((e) => ({ ...e }));
+function openPlanSheet(lib, project, focusLabel = '', day = '') {
+  const multi = day && shootDays(project).length > 1;
+  const rows = planOf(dayRec(project, day)).map((e) => ({ ...e }));
   for (const d of PLAN_DEFAULTS) if (!rows.some((e) => normLabel(e.label) === normLabel(d))) rows.push({ label: d, time: '' });
   if (focusLabel && !rows.some((e) => normLabel(e.label) === normLabel(focusLabel))) rows.push({ label: focusLabel, time: '' });
   let seq = 0;
@@ -1272,7 +1503,7 @@ function openPlanSheet(lib, project, focusLabel = '') {
   el.innerHTML = `
   <form class="sheet log-sheet plan-sheet form" autocomplete="off">
     <p class="eyebrow">${h(project.title)}</p>
-    <h2>계획 시간</h2>
+    <h2>계획 시간${multi ? ` <small class="day-of">${h(md(day))} ${h(wdOf(day))}</small>` : ''}</h2>
     <p class="muted small">시간을 다 고르면 시간 순서대로 저절로 정리돼요.</p>
     <ol class="plan-list"></ol>
     <button type="button" class="plan-add" data-add>+ 추가</button>
@@ -1355,7 +1586,7 @@ function openPlanSheet(lib, project, focusLabel = '') {
     const next = rows.filter((r) => r.time && r.label.trim()).map((r) => ({ id: r.id || Date.now().toString(36) + r.key, label: r.label.trim(), time: r.time }));
     $$('button', form).forEach((b) => (b.disabled = true));
     try {
-      await lib.setLog(project.id, next, 'plan');
+      await lib.setLog(project.id, next, 'plan', day);
       close();
       toast(next.length ? '계획을 적어 뒀어요' : '계획을 비웠어요');
       route();
@@ -1376,16 +1607,17 @@ const phoneFmt = (s) => {
   if (/^01\d{8,9}$/.test(d)) return d.length === 10 ? `${d.slice(0, 3)}-${d.slice(3, 6)}-${d.slice(6)}` : `${d.slice(0, 3)}-${d.slice(3, 7)}-${d.slice(7)}`;
   return s;
 };
-function openShareSheet(lib, project, a, editable) {
-  const prev = project.share || {};
+function openShareSheet(lib, project, a, editable, day = project.date) {
+  const dr = dayRec(project, day);
+  const prev = dr.share || {};
   // 주소의 시·군 이름 → 내가 고쳐 쓴 이름 (예: 고양 → 일산)을 기억해 둔다
   let alias = {};
   try { alias = JSON.parse(localStorage.getItem(CITY_ALIAS_KEY) || '{}'); } catch {}
   const cities = (a.locations || []).map((l) => cityOf(l.address) || '').filter(Boolean).filter((c, i, arr) => c !== arr[i - 1]);
-  const [, mm, dd] = (project.date || '').split('-').map(Number);
+  const [, mm, dd] = (day || '').split('-').map(Number);
   const v0 = {
     title: prev.title || '',
-    date: prev.date || (project.date ? `${mm}/${dd} ${project.weekday || '일월화수목금토'[new Date(project.date + 'T00:00:00').getDay()]}` : ''),
+    date: prev.date || (day ? `${mm}/${dd} ${day === project.date && project.weekday ? project.weekday : wdOf(day)}` : ''),
     route: prev.route || '',
     start: prev.start || '',
     end: prev.end || '',
@@ -1469,10 +1701,10 @@ function openShareSheet(lib, project, a, editable) {
     return { title: t('title'), date: t('date'), route: t('route'), start: v.start, end: v.end, fee: digits(v.fee), prod: t('prod'), pd: t('pd'), phone: t('phone'), note: t('note') };
   };
   const saveShare = (share) => {
-    if (editable && JSON.stringify(share) !== JSON.stringify(project.share || {})) lib.setShare(project.id, share).then(() => { project.share = share; }).catch(() => {});
+    if (editable && JSON.stringify(share) !== JSON.stringify(dr.share || {})) lib.setShare(project.id, share, day).then(() => { dr.share = share; }).catch(() => {});
   };
   const remember = () => {
-    const share = { ...values(), notion: project.share?.notion };
+    const share = { ...values(), notion: dr.share?.notion };
     if (!share.notion) delete share.notion;
     saveShare(share);
     const typed = share.route.split('>').map((x) => x.trim());
@@ -1495,7 +1727,7 @@ function openShareSheet(lib, project, a, editable) {
     // 업무일지의 기존 기록과 같은 모양으로: "11/12 목" → "11/12(목)미결"
     const dm = lines[0].match(/^\s*(\d{1,2}\/\d{1,2}(?:\s*[~,]\s*\d{1,2})*)\s*\(?([일월화수목금토]+)\)?\s*$/);
     if (dm) lines[0] = `${dm[1].replace(/\s+/g, '')}(${dm[2]})미결`;
-    const old = project.share?.notion;
+    const old = dr.share?.notion;
     if (old && JSON.stringify(old.lines.filter(Boolean)) === JSON.stringify(lines.filter(Boolean))) return toast('노션에 이미 같은 내용이 기록돼 있어요');
     const call = (replace) => fetch(`${WORKLOG_API}/append`, {
       method: 'POST',
