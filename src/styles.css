@@ -912,3 +912,11 @@ p, li, .stop-role, .tl-loc, .sr-sub { text-wrap: pretty; }
 .log-presets button.on { background: var(--accent); color: #fff; }
 .sheet-sub { margin: 18px 0 2px; font-size: 16px; font-weight: 800; }
 .day-sheet .share-times input[type=time] { min-width: 0; }
+
+/* ---------- 24시간 시간 칸 (2026-11-17) ---------- */
+.t24 { display: flex; align-items: center; gap: 2px; width: 100%; margin-top: 6px; padding: 0 6px; border-radius: 12px; border: 1px solid var(--line); background: var(--bg-alt); color: var(--text); }
+.t24:focus-within { border-color: var(--accent); box-shadow: 0 0 0 4px var(--accent-soft); }
+.t24 select { -webkit-appearance: none; appearance: none; flex: 1 1 0; min-width: 0; border: 0; background: transparent; color: inherit; font: inherit; font-size: 17px; font-weight: 700; font-variant-numeric: tabular-nums; text-align: center; text-align-last: center; padding: 12px 2px; outline: none; cursor: pointer; }
+.t24 b { font-weight: 800; opacity: .6; }
+.plan-row .t24 { margin-top: 0; }
+.prep-sheet .t24, .share-times .t24 { min-width: 0; }

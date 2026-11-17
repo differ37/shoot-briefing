@@ -1296,6 +1296,32 @@ function openDateSheet(lib, project, current, sheetDate) {
   });
 }
 
+// 24시간 시간 칸: [시 ▾] : [분 ▾] + 숨은 input(name=…, 값 "17:30"). FormData·이벤트는 숨은 input으로 받는다.
+// (아이폰 <input type=time>은 기기 설정 따라 오전/오후로만 보여서 바꿈 — 2026-11-17)
+const pad2 = (n) => String(n).padStart(2, '0');
+const t24 = (name, value = '', cls = '') => {
+  const ok = /^\d{1,2}:\d{2}$/.test(value || '');
+  const [hh, mm] = ok ? value.split(':').map(pad2) : ['', ''];
+  const opts = (n, cur) => `<option value="">--</option>${Array.from({ length: n }, (_, i) => `<option${pad2(i) === cur ? ' selected' : ''}>${pad2(i)}</option>`).join('')}`;
+  return `<span class="t24" data-t24><select class="t24-h" aria-label="시">${opts(24, hh)}</select><b>:</b><select class="t24-m" aria-label="분">${opts(60, mm)}</select><input type="hidden"${name ? ` name="${name}"` : ''}${cls ? ` class="${cls}"` : ''} value="${ok ? `${hh}:${mm}` : ''}"></span>`;
+};
+const syncT24 = (e) => {
+  const sel = e.target;
+  if (!sel.matches?.('.t24 select')) return;
+  const w = sel.closest('.t24');
+  const [hs, ms] = w.querySelectorAll('select');
+  const hid = w.querySelector('input');
+  if (sel === hs && hs.value && !ms.value) ms.value = '00';
+  hid.value = hs.value && ms.value ? `${hs.value}:${ms.value}` : '';
+  if (hid.value === hid.dataset.last && e.type === 'input') return;
+  hid.dataset.last = hid.value;
+  // 휠은 기기마다 input/change 중 하나만 오기도 해서 둘 다 알린다
+  hid.dispatchEvent(new Event('input', { bubbles: true }));
+  hid.dispatchEvent(new Event('change', { bubbles: true }));
+};
+document.addEventListener('input', syncT24, true);
+document.addEventListener('change', syncT24, true);
+
 const LOG_PRESETS = ['사무실 집합', '장비집 집합', '장비집 출발', '현장 도착', '현장 출발', '현장 종료', '장비집 도착', '업무 종료'];
 const nowHM = () => new Date().toTimeString().slice(0, 5);
 
@@ -1323,7 +1349,7 @@ function openLogSheet(lib, project, index, kind = 'log', preset = '', day = '') 
     ${isPlan ? '<p class="muted small">미리 정한 시간을 적어 두면 실제 기록과 나란히 비교돼요.</p>' : ''}
     <div class="log-presets">${LOG_PRESETS.map((t) => `<button type="button" data-preset="${h(t)}">${h(suggest(t))}</button>`).join('')}</div>
     <label>무엇${isPlan ? '을 할 건가요' : '을 했나요'}<input name="label" value="${h(cur?.label || preset)}" placeholder="예: 장비집2 집합" maxlength="30"></label>
-    <label>${isPlan ? '계획 시간' : '시간'}${planned ? ` <span class="opt">계획 ${h(planned.time)}</span>` : ''}<input type="time" name="time" value="${h(cur?.time || (isPlan ? '' : nowHM()))}" required></label>
+    <label>${isPlan ? '계획 시간' : '시간'}${planned ? ` <span class="opt">계획 ${h(planned.time)}</span>` : ''}${t24('time', cur?.time || (isPlan ? '' : nowHM()))}</label>
     <div class="sheet-actions">
       ${cur ? '<button type="button" class="btn ghost danger" data-del>지우기</button>' : ''}
       <span class="spacer"></span>
@@ -1358,6 +1384,7 @@ function openLogSheet(lib, project, index, kind = 'log', preset = '', day = '') 
     e.preventDefault();
     const v = Object.fromEntries(new FormData(form));
     if (!v.label.trim()) return toast('무엇을 했는지 적어 주세요');
+    if (!v.time) return toast('시간을 골라 주세요');
     const item = { id: cur?.id || Date.now().toString(36), label: v.label.trim(), time: v.time };
     if (cur) entries[index] = item; else entries.push(item);
     save(entries, isPlan ? '계획을 적어 뒀어요' : '기록했어요');
@@ -1383,7 +1410,7 @@ function openDaySheet(lib, project, a, day, days) {
     <div class="log-presets">${['A팀', 'B팀', 'C팀'].map((t) => `<button type="button" data-team="${t}" class="${mine.team === t ? 'on' : ''}">${t}</button>`).join('')}</div>
     <div class="share-times">
       <label>팀<input name="team" value="${h(mine.team || '')}" placeholder="예: B팀" maxlength="12"></label>
-      <label>내 집합 시간<input type="time" name="time" value="${h(mine.time || '')}"></label>
+      <label>내 집합 시간${t24('time', mine.time || '')}</label>
     </div>
     ${places.length ? `<div class="log-presets">${places.map((l, i) => `<button type="button" data-place="${i}">${h(l.name)}</button>`).join('')}</div>` : ''}
     <label>집합 장소<input name="place" value="${h(mine.place || '')}" placeholder="${h(sheet.place || '예: 광릉초등학교')}" maxlength="40"></label>
@@ -1521,7 +1548,7 @@ function openPlanSheet(lib, project, focusLabel = '', day = '') {
   const rowHtml = (r) => `
     <li class="plan-row" data-key="${r.key}">
       <input class="plan-label" value="${h(r.label)}" placeholder="무엇을 (예: 사무실 집합)" maxlength="30" aria-label="내용">
-      <input class="plan-time" type="time" value="${h(r.time)}" aria-label="시간">
+      ${t24('', r.time, 'plan-time')}
       <button type="button" class="plan-del" data-del aria-label="이 줄 지우기">×</button>
     </li>`;
   const render = () => { list.innerHTML = rows.map(rowHtml).join(''); };
@@ -1543,7 +1570,7 @@ function openPlanSheet(lib, project, focusLabel = '', day = '') {
     const r = rowOf(e.target);
     if (!r) return;
     if (e.target.classList.contains('plan-label')) r.label = e.target.value;
-    else r.time = e.target.value;
+    else if (e.target.classList.contains('plan-time')) r.time = e.target.value;
   });
   // 자리 옮기기는 시간 고르기가 끝난 뒤(칸에서 손을 뗀 뒤)에만.
   // 아이폰 시간 휠은 돌리는 중에도 change가 계속 와서, 그때 줄을 옮기면 휠이 닫히고 중간 시간이 들어갔다.
@@ -1577,7 +1604,7 @@ function openPlanSheet(lib, project, focusLabel = '', day = '') {
   el.addEventListener('click', (e) => { if (e.target.closest('[data-cancel]')) close(); });
   if (focusLabel) {
     const r = rows.find((x) => normLabel(x.label) === normLabel(focusLabel));
-    setTimeout(() => list.querySelector(`[data-key="${r?.key}"] .plan-time`)?.focus(), 350);
+    setTimeout(() => list.querySelector(`[data-key="${r?.key}"] .t24-h`)?.focus(), 350);
   }
   form.addEventListener('submit', async (e) => {
     e.preventDefault();
@@ -1637,8 +1664,8 @@ function openShareSheet(lib, project, a, editable, day = project.date) {
     <p class="eyebrow">업무 공유</p>
     <h2>업무 시간 보내기</h2>
     <div class="share-times">
-      <label>현장 집합<input type="time" name="start" value="${h(v0.start)}"></label>
-      <label>현장 종료<input type="time" name="end" value="${h(v0.end)}"></label>
+      <label>현장 집합${t24('start', v0.start)}</label>
+      <label>현장 종료${t24('end', v0.end)}</label>
     </div>
     <label class="q-price">견적<span class="won-input"><input name="fee" inputmode="numeric" value="${h(v0.fee ? won(v0.fee) : '')}" placeholder="예: 550,000"><em>원</em></span></label>
     <label>제목<input name="title" value="${h(v0.title)}" placeholder="예: 비트펠라하우스 뮤비"></label>
